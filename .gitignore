@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node / local runtimes
+node_modules/
+
+# Generated/local data
+data/
+outputs/
+*.sqlite
+*.sqlite3
+*.db
+*.duckdb
+
+# Codex/OMX local orchestration state
+.omx/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Office temp files
+~$*
+*.tmp
+*.bak
+
+# Local legacy workbench files kept on this machine only.
+# The public starter tracks the generic package under opencrab_starter/.
+/*.py
+/*.mjs
+/*.ps1
+/knowledge/*
+!/knowledge/README.md
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

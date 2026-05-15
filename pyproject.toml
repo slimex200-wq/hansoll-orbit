@@ -1,0 +1,12 @@
+[project]
+name = "opencrab-starter"
+version = "0.1.0"
+description = "Generic local starter for AI-ready business file indexing"
+requires-python = ">=3.11"
+dependencies = [
+  "openpyxl",
+  "pypdf",
+]
+
+[tool.ruff]
+line-length = 100
