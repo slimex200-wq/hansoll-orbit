@@ -54,12 +54,25 @@ List project rules:
 python -m opencrab_starter.cli rules
 ```
 
+Find prior mail context before drafting:
+
+```powershell
+python -m opencrab_starter.cli mail-context --query "supplier issue subject or pasted mail text" --sender "sender name"
+```
+
+When the requested latest mail is not indexed yet, pass the expected mail time. The command will flag the mail DB as stale and still return related history by style number, sender, and issue terms:
+
+```powershell
+python -m opencrab_starter.cli mail-context --query "S#123456789 fabric defect" --expected-after "2026-05-15T18:03:00"
+```
+
 ## Repository Shape
 
 ```text
 opencrab_starter/
   cli.py              # command line entrypoint
   config.py           # environment-based config
+  mail_history.py     # prior mail context before drafting
   thin_index.py       # small SQLite file pointer index
   knowledge.py        # loads project rules
 knowledge/
