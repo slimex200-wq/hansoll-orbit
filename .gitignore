@@ -26,20 +26,18 @@ outputs/
 .env
 .env.*
 !.env.example
-AGENTS.md
 
 # Office temp files
 ~$*
 *.tmp
 *.bak
 
-# Local legacy workbench files kept on this machine only.
-# The public starter tracks the generic package under opencrab_starter/.
+# Local legacy workbench scripts kept on this machine only.
+# Talbots operating context under AGENTS.md and knowledge/ is intentionally
+# tracked in the private opencrab-Talbots repository.
 /*.py
 /*.mjs
 /*.ps1
-/knowledge/*
-!/knowledge/README.md
 
 # OS/editor
 .DS_Store
