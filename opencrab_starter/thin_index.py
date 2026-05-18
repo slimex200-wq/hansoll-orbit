@@ -75,7 +75,11 @@ def iter_supported_files(source_root: Path) -> list[IndexedFile]:
             extension = path.suffix.lower()
             if extension not in SUPPORTED_EXTENSIONS:
                 continue
-            stat = path.stat()
+            try:
+                stat = path.stat()
+                fingerprint = fingerprint_file(path)
+            except OSError:
+                continue
             files.append(
                 IndexedFile(
                     path=path,
@@ -83,7 +87,7 @@ def iter_supported_files(source_root: Path) -> list[IndexedFile]:
                     extension=extension,
                     size=stat.st_size,
                     modified_at=datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
-                    fingerprint=fingerprint_file(path),
+                    fingerprint=fingerprint,
                 )
             )
     return files

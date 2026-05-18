@@ -1,0 +1,17 @@
+{
+  "sheets": [
+    {
+      "name": "Submit",
+      "required_values": {
+        "A1": "PRINT SUBMIT FORM"
+      },
+      "non_empty": [
+        "A3"
+      ],
+      "bordered_ranges": [
+        "A3:C4"
+      ],
+      "merged_ranges": []
+    }
+  ]
+}

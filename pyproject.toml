@@ -5,6 +5,7 @@ description = "Generic local starter for AI-ready business file indexing"
 requires-python = ">=3.11"
 dependencies = [
   "openpyxl",
+  "Pillow",
   "pypdf",
 ]
 
