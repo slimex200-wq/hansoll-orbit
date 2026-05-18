@@ -81,6 +81,56 @@ class MailThinIngestTests(unittest.TestCase):
         self.assertIn("261900006-002", row[1])
         self.assertIn("defect", row[2])
 
+    def test_build_index_appends_to_existing_ontology_schema(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
+        root.mkdir(parents=True)
+        try:
+            (root / "sample.eml").write_text(EML, encoding="utf-8")
+            db_path = root / "mail.sqlite"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE mails (
+                        mail_id TEXT PRIMARY KEY,
+                        node_id TEXT,
+                        source_id TEXT,
+                        folder TEXT,
+                        subject TEXT,
+                        sender TEXT,
+                        to_recipients TEXT,
+                        cc_recipients TEXT,
+                        received TEXT,
+                        seasons TEXT,
+                        style_numbers TEXT,
+                        quality_codes TEXT,
+                        action_terms TEXT,
+                        body_hash TEXT NOT NULL,
+                        body_chars INTEGER NOT NULL,
+                        body_preview TEXT NOT NULL,
+                        body_zlib BLOB NOT NULL,
+                        indexed_at TEXT NOT NULL
+                    )
+                    """
+                )
+            args = build_parser().parse_args(
+                ["build", "--source", str(root), "--db", str(db_path)]
+            )
+            with redirect_stdout(StringIO()):
+                self.assertEqual(build_index(args), 0)
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT subject, to_recipients, body_hash, length(body_zlib) FROM mails"
+                ).fetchone()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertIn("S#261900006-002", row[0])
+        self.assertIn("Sam", row[1])
+        self.assertTrue(row[2])
+        self.assertGreater(row[3], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

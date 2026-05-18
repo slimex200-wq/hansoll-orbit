@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email import policy
@@ -230,6 +231,43 @@ def init_db(db_path: Path) -> None:
         )
 
 
+def insert_mail_record(conn: sqlite3.Connection, record: MailRecord) -> None:
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(mails)")]
+    source_path = Path(record.source_path)
+    body_hash = hashlib.sha256(record.body_preview.encode("utf-8", "ignore")).hexdigest()
+    values: dict[str, object] = {
+        "mail_id": record.mail_id,
+        "node_id": f"mail:{record.mail_id}",
+        "source_id": record.source_path,
+        "folder": source_path.parent.name,
+        "received": record.received,
+        "sender": record.sender,
+        "recipients": record.recipients,
+        "to_recipients": record.recipients,
+        "cc_recipients": "",
+        "subject": record.subject,
+        "seasons": "",
+        "style_numbers": record.style_numbers,
+        "quality_codes": "",
+        "action_terms": record.action_terms,
+        "body_hash": body_hash,
+        "body_chars": record.body_chars,
+        "body_preview": record.body_preview,
+        "body_zlib": zlib.compress(record.body_preview.encode("utf-8", "ignore")),
+        "source_path": record.source_path,
+        "indexed_at": record.indexed_at,
+    }
+    insert_columns = [column for column in columns if column in values]
+    placeholders = ", ".join("?" for _ in insert_columns)
+    conn.execute(
+        f"""
+        INSERT OR REPLACE INTO mails ({", ".join(insert_columns)})
+        VALUES ({placeholders})
+        """,
+        [values[column] for column in insert_columns],
+    )
+
+
 def iter_mail_files(root: Path, path_contains: list[str]) -> Iterable[Path]:
     lowered_terms = [term.lower() for term in path_contains if term]
     for dirpath, dirnames, filenames in os.walk(root):
@@ -273,27 +311,7 @@ def build_index(args: argparse.Namespace) -> int:
             except Exception:
                 stats["files_error"] += 1
                 continue
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO mails (
-                    mail_id, received, sender, recipients, subject, body_chars,
-                    body_preview, style_numbers, action_terms, source_path, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.mail_id,
-                    record.received,
-                    record.sender,
-                    record.recipients,
-                    record.subject,
-                    record.body_chars,
-                    record.body_preview,
-                    record.style_numbers,
-                    record.action_terms,
-                    record.source_path,
-                    record.indexed_at,
-                ),
-            )
+            insert_mail_record(conn, record)
             stats["mails_indexed"] += 1
             if args.progress_every and stats["files_seen"] % args.progress_every == 0:
                 conn.commit()
