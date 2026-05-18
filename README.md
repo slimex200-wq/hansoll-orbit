@@ -1,8 +1,64 @@
-# OpenCrab Starter
+# OpenCrab Talbots Workbench
+
+This private repository is the Talbots/MGF workbench version of OpenCrab Starter. It keeps the reusable code plus the small operating context needed for fresh Codex chats to behave like the current Park Daeri workflow.
+
+The raw business files still stay outside git in OneDrive. The repository tracks only code, docs, workflow rules, layout specs, and bootstrap notes.
+
+## Start A Fresh Codex Chat
+
+Open this project root:
+
+```text
+C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab
+```
+
+Before doing Talbots work, the assistant should read:
+
+- `AGENTS.md`
+- `knowledge/current_session_handoff.md`
+- `knowledge/talbots_workflow_rules.md`
+
+Then run:
+
+```powershell
+python -m opencrab_starter.cli audit --require-fresh-mail
+python -m opencrab_starter.cli rules
+```
+
+For a copy-paste startup message, use `knowledge/new_chat_bootstrap_prompt.md`.
+
+## Talbots Operating Rules
+
+- Do not create official Talbots/MGF Excel forms from scratch.
+- Copy and edit the existing OneDrive Excel templates.
+- Keep submit form, mail dispatch, costing sheet, WIP, allocation, TP/BOM, and RA chart workflows separate.
+- Search by style, season, division, supplier, mail history, and source workbook evidence before generating output.
+- Validate workbook layout before sharing generated Excel files.
+- Human review is still required before sending mail or customer-facing files.
+
+## Private Data Boundary
+
+Committed:
+
+- reusable Python package and scripts
+- tests and documentation
+- `AGENTS.md`
+- small workflow rules under `knowledge/`
+- workbook layout specs under `knowledge/workbook_layout_specs/`
+
+Not committed:
+
+- OneDrive source files
+- generated Excel/report outputs
+- SQLite indexes and vector DBs
+- raw mail bodies
+- credentials or `.env`
+
+# OpenCrab Starter Base
 
 OpenCrab Starter is a lightweight local workbench for building an AI-ready knowledge layer from ordinary business files.
 
-It is intentionally shipped in an **initial model state**: no company-specific files, no private workflow rules, no generated outputs, and no private workflow history. Bring your own folders, templates, rules, and examples.
+The public starter is intentionally shipped in an **initial model state**: no company-specific files, no private workflow rules, no generated outputs, and no private workflow history. This private Talbots repo intentionally adds small workflow rules and handoff files while still excluding raw source data.
 
 ## What It Does
 
@@ -17,7 +73,6 @@ It is intentionally shipped in an **initial model state**: no company-specific f
 - No generated Excel or report outputs.
 - No raw mail bodies.
 - No private source files.
-- No company-specific rules.
 - No vector database by default.
 
 ## Quick Start

@@ -18,7 +18,7 @@ At the start of a new chat, read these local handoff files if they exist:
 - `knowledge/current_session_handoff.md`
 - `knowledge/new_chat_bootstrap_prompt.md`
 
-These files capture the current working condition of the long-running Talbots/OpenCrab conversation. They are local-only and intentionally ignored by git.
+These files capture the current working condition of the long-running Talbots/OpenCrab conversation. In this private Talbots repo, the small rules and handoff files are tracked so fresh chats can inherit the same operating context.
 
 ## Mandatory Startup For Talbots Work
 
