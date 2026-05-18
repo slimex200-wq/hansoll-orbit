@@ -1,0 +1,28 @@
+{
+  "sheets": [
+    {
+      "name": "263900045 BULK",
+      "required_values": {
+        "B2": "Buying Agent/Agent Office",
+        "B3": "Season/Division",
+        "B4": "Vendor/Supplier",
+        "B5": "Fabric Ql'ty#",
+        "B7": "ST/#",
+        "B9": "Type of Submit",
+        "B10": "Submit date",
+        "B11": "Final approval date"
+      },
+      "non_empty": [
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C7",
+        "C9",
+        "C10"
+      ],
+      "bordered_ranges": [],
+      "merged_ranges": []
+    }
+  ]
+}

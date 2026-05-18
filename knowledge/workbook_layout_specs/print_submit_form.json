@@ -1,0 +1,37 @@
+{
+  "sheets": [
+    {
+      "name": "264952221 FRESH STRIPE",
+      "required_values": {
+        "A1": "PRINT SUBMIT FORM",
+        "G1": "STRIKE OFF SUBMIT            SAMPLE YARDAGE              BULK SUBMIT",
+        "A2": "PRINT NAME:",
+        "A5": "STYLE #:",
+        "A8": "COLOR COMBO:",
+        "I8": "SCREEN PRINT:",
+        "G9": "PIGMENT PRINT:",
+        "I9": "DIGITAL PRINT:",
+        "G10": "DISCHARGE PRINT:",
+        "I10": "ROTARY: "
+      },
+      "non_empty": [
+        "B2",
+        "B5",
+        "B8",
+        "E8"
+      ],
+      "bordered_ranges": [
+        "G8:I11",
+        "A2:I8"
+      ],
+      "merged_ranges": [
+        "A1:E1",
+        "G1:I1",
+        "G8:H8",
+        "G9:H9",
+        "G10:H10",
+        "G11:I11"
+      ]
+    }
+  ]
+}

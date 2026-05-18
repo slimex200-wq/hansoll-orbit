@@ -1,0 +1,36 @@
+{
+  "sheets": [
+    {
+      "name": "FL26 OUTLET RA",
+      "required_values": {
+        "A3": "Dept",
+        "B3": "STYLE #",
+        "C3": "BM",
+        "D3": "VENDOR/ FACTORY",
+        "E3": "IMAGE",
+        "F3": "COLOR",
+        "H3": "Quality Set up Status "
+      },
+      "non_empty": [
+        "A1",
+        "B5",
+        "F5",
+        "G5"
+      ],
+      "bordered_ranges": [
+        "A3:Y5"
+      ],
+      "merged_ranges": [
+        "A1:Y2",
+        "A3:A4",
+        "B3:B4",
+        "C3:C4",
+        "D3:D4",
+        "E3:E4",
+        "F3:F4",
+        "G3:G4",
+        "H3:H4"
+      ]
+    }
+  ]
+}

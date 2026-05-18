@@ -26,6 +26,7 @@ outputs/
 .env
 .env.*
 !.env.example
+AGENTS.md
 
 # Office temp files
 ~$*
