@@ -23,6 +23,27 @@ At the start of a new chat, read these local handoff files if they exist:
 
 These files capture the current working condition of the long-running Talbots/OpenCrab conversation. In this private Talbots repo, the small rules and handoff files are tracked so fresh chats can inherit the same operating context.
 
+## Team Startup Phrase
+
+If the user says `작업 시작하자`, `시작하자`, `start work`, or asks to begin working after a fresh install, treat it as the standard Talbots startup request.
+
+1. Confirm the current directory is this project root or a valid worktree.
+2. If `.env` or `.venv` is missing, run or point to:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_team_member.ps1
+```
+
+3. Run:
+
+```powershell
+python -m opencrab_starter.cli audit --require-fresh-mail
+python -m opencrab_starter.cli rules
+```
+
+4. If setup or audit is incomplete, report the missing local item plainly: OneDrive access/path, Python dependencies, local indexes, or Outlook/mail freshness. Do not invent business facts to compensate.
+5. If audit passes, say the workspace is ready and ask for the style/task only if the user has not already provided one.
+
 ## Mandatory Startup For Talbots Work
 
 For any request involving Talbots, MGF, WIP, submit forms, dispatch mail, costing, TP, BOM, sketches, RA charts, lab dips, or style numbers, do this before generating customer-facing output:

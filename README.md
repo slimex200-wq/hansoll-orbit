@@ -4,6 +4,24 @@ This private repository is the Talbots/MGF workbench version of OpenCrab Starter
 
 The raw business files still stay outside git in OneDrive. The repository tracks only code, docs, workflow rules, layout specs, and bootstrap notes.
 
+## Team Install
+
+For a teammate's first machine setup:
+
+```powershell
+git clone https://github.com/slimex200-wq/opencrab-Talbots.git
+cd opencrab-Talbots
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_team_member.ps1
+```
+
+Then open the cloned folder in Codex and type:
+
+```text
+작업 시작하자
+```
+
+See [docs/TEAM_CODEX_SETUP.md](docs/TEAM_CODEX_SETUP.md) for OneDrive path, index refresh, and Outlook mail setup notes.
+
 ## Start A Fresh Codex Chat
 
 Open this project root. This is the fixed path to use for every new Codex chat:
