@@ -2,7 +2,10 @@
 
 This workspace is a local business workbench, not the raw business data folder.
 
-- Project root: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
+- Canonical Codex project root: `C:\Users\shjung1\OpenCrab-Talbots`
+- Actual git workspace target: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
+- `C:\Users\shjung1\OpenCrab-Talbots` is a Windows junction to the actual git workspace. Use the canonical path when opening new Codex chats.
+- Do not use `C:\Users\shjung1\OpenCrab` for Talbots work; that is the base OpenCrab repo and lacks this project's Talbots rules/handoff.
 - Business source root is configured by `.env` as `OPENCRAB_SOURCE_ROOT`.
 - Talbots source files live in OneDrive and remain the source of truth.
 - Local SQLite indexes under `data/` are search indexes, not final evidence by themselves.
@@ -63,6 +66,17 @@ Use source evidence in this order unless the user gives a stronger source:
 6. Thin index snippets only as pointers to the real files.
 
 Never treat a DB snippet as enough to finalize a file if the original workbook/template needs to be copied.
+
+## Evidence-First Work Mode
+
+For difficult Talbots/MGF tasks, do not jump straight from search results to a filled workbook or final answer.
+
+1. Build a compact evidence table first: style, row/item, value to fill, source, source date, confidence, and ambiguity.
+2. Apply no-source-no-fill: if the value is not supported by source evidence, write `TBD`, `N/A`, `confirm`, or a short note instead of guessing.
+3. Search with exact keys before broad concepts: style number, vendor, subject, tracking number, color, season, and division.
+4. If sources conflict, resolve by source priority and source date, then state the conflict if it still matters.
+5. After editing Excel, verify the filled cells against the evidence table and preserve traceability with comments or `SOURCE_NOTES` when useful.
+6. In the final report, separate verified facts, assumptions, and remaining risks.
 
 ## Known Local Template Map
 

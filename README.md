@@ -6,11 +6,15 @@ The raw business files still stay outside git in OneDrive. The repository tracks
 
 ## Start A Fresh Codex Chat
 
-Open this project root:
+Open this project root. This is the fixed path to use for every new Codex chat:
 
 ```text
-C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab
+C:\Users\shjung1\OpenCrab-Talbots
 ```
+
+`C:\Users\shjung1\OpenCrab-Talbots` is a Windows junction to the actual git workspace at `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`.
+
+Do not open `C:\Users\shjung1\OpenCrab` for Talbots work. That folder is the base OpenCrab repo and does not carry the Park Daeri/Talbots handoff.
 
 Before doing Talbots work, the assistant should read:
 

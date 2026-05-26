@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .config import load_config
@@ -13,6 +14,7 @@ from .thin_index import build_index, search_index
 
 
 def main() -> None:
+    configure_stdout()
     parser = argparse.ArgumentParser(prog="opencrab-starter")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -68,6 +70,15 @@ def main() -> None:
     mail_parser.add_argument("--expected-after")
     mail_parser.add_argument("--mail-db")
     mail_parser.add_argument("--limit", type=int, default=10)
+
+    judge_parser = subparsers.add_parser(
+        "judge",
+        help="Judge a Talbots work request against local evidence, rules, and 9-space routing",
+    )
+    judge_parser.add_argument("--query", required=True)
+    judge_parser.add_argument("--sender")
+    judge_parser.add_argument("--expected-after")
+    judge_parser.add_argument("--limit", type=int, default=8)
 
     mail_refresh_parser = subparsers.add_parser(
         "mail-refresh",
@@ -205,6 +216,19 @@ def main() -> None:
             limit=args.limit,
         )
         print(json.dumps(context, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "judge":
+        from .decision_engine import judge_query
+
+        result = judge_query(
+            config,
+            args.query,
+            sender=args.sender,
+            expected_after=args.expected_after,
+            limit=args.limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
     if args.command == "mail-refresh":
@@ -389,6 +413,11 @@ def list_layout_specs(spec_dir: Path) -> list[dict[str, str]]:
         {"name": path.stem, "path": str(path)}
         for path in sorted(spec_dir.glob("*.json"), key=lambda item: item.name.lower())
     ]
+
+
+def configure_stdout() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

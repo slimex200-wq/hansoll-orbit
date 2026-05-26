@@ -4,6 +4,8 @@ import argparse
 import os
 import shutil
 import sqlite3
+import stat
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -118,6 +120,47 @@ def collect_node_modules_candidate(root: Path, include_node_modules: bool) -> li
     return [Candidate(path, "reinstallable Node dependency directory", safe_size(path))]
 
 
+def zip_is_valid(path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return archive.testzip() is None
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def collect_expanded_zip_sibling_candidates(root: Path, enabled: bool, keep_dirs: set[Path]) -> list[Candidate]:
+    if not enabled:
+        return []
+    outputs = root / "outputs"
+    if not outputs.exists():
+        return []
+
+    candidates: list[Candidate] = []
+    for dirpath, dirnames, _ in os.walk(outputs, onerror=lambda _: None):
+        current = Path(dirpath)
+        if should_keep(current, keep_dirs):
+            dirnames[:] = []
+            continue
+        for dirname in list(dirnames):
+            unpacked = current / dirname
+            if should_keep(unpacked, keep_dirs):
+                continue
+            zip_sibling = current / f"{dirname}.zip"
+            if not zip_sibling.is_file():
+                continue
+            if not zip_is_valid(zip_sibling):
+                continue
+            candidates.append(
+                Candidate(
+                    unpacked,
+                    "expanded artifact with valid .zip sibling",
+                    safe_size(unpacked),
+                )
+            )
+            dirnames.remove(dirname)
+    return candidates
+
+
 def delete_candidate(root: Path, candidate: Candidate) -> None:
     path = candidate.path.resolve()
     if not is_relative_to(path, root):
@@ -125,9 +168,18 @@ def delete_candidate(root: Path, candidate: Candidate) -> None:
     if path == root:
         raise RuntimeError("Refusing to delete workspace root")
     if path.is_dir():
-        shutil.rmtree(path)
+        shutil.rmtree(path, onexc=handle_remove_error)
     elif path.exists():
         path.unlink()
+
+
+def handle_remove_error(function, path: str, excinfo: BaseException) -> None:
+    target = Path(path)
+    try:
+        target.chmod(stat.S_IWRITE)
+        function(path)
+    except OSError:
+        raise excinfo
 
 
 def vacuum_databases(root: Path) -> list[tuple[Path, int, int]]:
@@ -163,6 +215,11 @@ def main() -> int:
         action="store_true",
         help="Also delete node_modules. It can be reinstalled, but is kept by default.",
     )
+    parser.add_argument(
+        "--remove-expanded-zip-siblings",
+        action="store_true",
+        help="Delete expanded output folders only when a valid same-name .zip sibling exists.",
+    )
     parser.add_argument("--vacuum-data", action="store_true", help="Compact sqlite databases under data/.")
     args = parser.parse_args()
 
@@ -173,6 +230,7 @@ def main() -> int:
         candidates.extend(collect_output_candidates(root, args.outputs_older_than_days, keep_dirs))
     if not args.skip_caches:
         candidates.extend(collect_cache_candidates(root))
+    candidates.extend(collect_expanded_zip_sibling_candidates(root, args.remove_expanded_zip_siblings, keep_dirs))
     candidates.extend(collect_node_modules_candidate(root, args.include_node_modules))
 
     total_size = sum(candidate.size for candidate in candidates)
@@ -183,9 +241,19 @@ def main() -> int:
         print(f"- {rel} | {format_size(candidate.size)} | {candidate.reason}")
 
     if args.apply:
+        failures: list[tuple[Candidate, str]] = []
         for candidate in candidates:
-            delete_candidate(root, candidate)
-        print("Deleted selected candidates.")
+            try:
+                delete_candidate(root, candidate)
+            except OSError as exc:
+                failures.append((candidate, str(exc)))
+        deleted_count = len(candidates) - len(failures)
+        print(f"Deleted {deleted_count} selected candidates.")
+        if failures:
+            print("Skipped candidates that could not be removed:")
+            for candidate, error in failures:
+                rel = candidate.path.resolve().relative_to(root.resolve())
+                print(f"- {rel}: {error}")
     else:
         print("No files deleted. Re-run with --apply to delete.")
 
