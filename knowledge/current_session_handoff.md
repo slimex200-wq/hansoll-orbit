@@ -1,6 +1,6 @@
 # Current Session Handoff - OpenCrab Talbots
 
-Updated: 2026-05-22
+Updated: 2026-05-26
 
 This file exists so a fresh Codex chat can behave like the current long-running "Park Daeri" session.
 
@@ -96,6 +96,7 @@ Last refresh verified on 2026-05-22 KST:
 15. For SP'27 HWW/Haven Feb-Mar CM inquiry or labor-check charts, use `Talbots\Development\SP27\HWW\SP'27 HWW recap.xlsx` sheet `HWW FEB-MAR` as the primary source. Do not use `SP27_TALBOTS_HAVEN_SELECTED_STYLES_HANSOLL_MGF.pptx` unless the user specifically asks for selected sample recap.
 16. SP'27 HWW Feb-Mar TP files may be split between `OneDrive - 한솔섬유\Attachments` and `Talbots\Development\TP\Done`. If `style-search` misses the styles, search OneDrive filenames and verify the PDF text before sharing.
 17. For difficult multi-source work, use the Evidence-First Reliability Protocol: ingest/audit first, build an evidence table, apply no-source-no-fill, fill or draft only from cited sources, then verify output against the evidence table.
+18. For Talbots SBD/ACC CPO work, `CPO X Ref` (`3016...`) is `Master PO` and `CPO No` (`650...`/`651...`) is `Sub PO`. Always verify PO fields together with `C3`/grand total before saying the SBD is complete.
 
 ## Template And Source Map
 

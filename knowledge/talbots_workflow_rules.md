@@ -1,6 +1,6 @@
 # Talbots Workflow Rules
 
-Updated: 2026-05-22
+Updated: 2026-05-26
 
 ## Source Priority
 
@@ -52,6 +52,14 @@ Updated: 2026-05-22
 - Validate generated Excel layout before sharing or sending.
 - Human review is required before sending mail, sharing generated Excel, or acting on ambiguous color/status evidence.
 - If a generated form layout differs from the known template, treat it as a regression and fix the generator/spec before reuse.
+
+## SBD / ACC CPO Order Recap Rules
+
+- For Talbots SBD/ACC order recap work from CPO exports, map `CPO X Ref` values such as `3016...` to `Master PO`.
+- Map `CPO No` values such as `650...` or `651...` to `Sub PO`.
+- Do not put `CPO X Ref` in `Sub PO` columns.
+- Before reporting SBD work complete, verify both quantity totals and PO fields: `C3`/grand total must match CPO total, `Master PO` must be `3016...`, and all populated `Sub PO` cells must be `650...`/`651...`.
+- When reusing carry-over files with extra season tabs, select the tab by current GAC/IH date before judging whether the style is already filled.
 
 ## TP / Sketch / BOM Rules
 
