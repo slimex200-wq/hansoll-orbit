@@ -4,7 +4,7 @@ import shutil
 import sqlite3
 import unittest
 import uuid
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -69,7 +69,7 @@ class MailThinIngestTests(unittest.TestCase):
             )
             with redirect_stdout(StringIO()):
                 self.assertEqual(build_index(args), 0)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 row = conn.execute(
                     "SELECT subject, style_numbers, action_terms FROM mails"
                 ).fetchone()
@@ -87,7 +87,7 @@ class MailThinIngestTests(unittest.TestCase):
         try:
             (root / "sample.eml").write_text(EML, encoding="utf-8")
             db_path = root / "mail.sqlite"
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
                     CREATE TABLE mails (
@@ -112,12 +112,10 @@ class MailThinIngestTests(unittest.TestCase):
                     )
                     """
                 )
-            args = build_parser().parse_args(
-                ["build", "--source", str(root), "--db", str(db_path)]
-            )
+            args = build_parser().parse_args(["build", "--source", str(root), "--db", str(db_path)])
             with redirect_stdout(StringIO()):
                 self.assertEqual(build_index(args), 0)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 row = conn.execute(
                     "SELECT subject, to_recipients, body_hash, length(body_zlib) FROM mails"
                 ).fetchone()

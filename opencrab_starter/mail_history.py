@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,7 @@ def load_mail_context(
     sender: str | None = None,
     expected_after: str | None = None,
     limit: int = 10,
+    max_age_hours: int = 72,
 ) -> dict[str, Any]:
     if not db_path.exists():
         return {
@@ -84,6 +85,14 @@ def load_mail_context(
             "available": False,
             "error": "mail DB not found",
             "query": query,
+            "latest_received": None,
+            "latest_indexed_at": None,
+            "freshness_source": None,
+            "max_age_hours": max_age_hours,
+            "age_hours": None,
+            "db_may_be_stale": True,
+            "hits": [],
+            "drafting_guardrail": "Mail DB is unavailable. Refresh mail ingest before drafting.",
         }
 
     con = sqlite3.connect(db_path)
@@ -92,6 +101,20 @@ def load_mail_context(
         _ensure_mail_schema(con)
         total_mails = con.execute("select count(*) from mails").fetchone()[0]
         latest_received = con.execute("select max(received) from mails").fetchone()[0]
+        mail_columns = _table_columns(con, "mails")
+        latest_indexed_at = (
+            con.execute("select max(indexed_at) from mails").fetchone()[0]
+            if "indexed_at" in mail_columns
+            else None
+        )
+        freshness_value = latest_indexed_at or latest_received
+        age_hours = _age_hours(freshness_value)
+        db_may_be_stale = _is_db_stale(
+            latest_received,
+            expected_after,
+            latest_indexed_at=latest_indexed_at,
+            max_age_hours=max_age_hours,
+        )
 
         styles = extract_style_numbers(query)
         terms = extract_search_terms(query)
@@ -122,23 +145,34 @@ def load_mail_context(
             "expected_after": expected_after,
             "mail_count": total_mails,
             "latest_received": latest_received,
-            "db_may_be_stale": _is_db_stale(latest_received, expected_after),
+            "latest_indexed_at": latest_indexed_at,
+            "freshness_source": "indexed_at" if latest_indexed_at else "received",
+            "max_age_hours": max_age_hours,
+            "age_hours": age_hours,
+            "db_may_be_stale": db_may_be_stale,
             "extracted_styles": styles,
             "extracted_terms": terms,
             "hits": ranked,
-            "drafting_guardrail": _drafting_guardrail(latest_received, expected_after, ranked),
+            "drafting_guardrail": _drafting_guardrail(
+                latest_received,
+                expected_after,
+                ranked,
+                latest_indexed_at=latest_indexed_at,
+                max_age_hours=max_age_hours,
+            ),
         }
     finally:
         con.close()
 
 
 def _ensure_mail_schema(con: sqlite3.Connection) -> None:
-    tables = {
-        row[0]
-        for row in con.execute("select name from sqlite_master where type='table'")
-    }
+    tables = {row[0] for row in con.execute("select name from sqlite_master where type='table'")}
     if "mails" not in tables:
         raise ValueError("mail DB does not contain a mails table")
+
+
+def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in con.execute(f"pragma table_info({table})")}
 
 
 def _search_exact(
@@ -263,14 +297,35 @@ def _compact_preview(value: str | None, max_chars: int = 420) -> str:
     return text[: max_chars - 3] + "..."
 
 
-def _is_db_stale(latest_received: str | None, expected_after: str | None) -> bool:
-    if not latest_received or not expected_after:
+def _is_db_stale(
+    latest_received: str | None,
+    expected_after: str | None,
+    *,
+    latest_indexed_at: str | None = None,
+    max_age_hours: int = 72,
+) -> bool:
+    freshness_value = latest_indexed_at or latest_received
+    freshness_dt = _parse_datetime(freshness_value) if freshness_value else None
+    if freshness_dt is None:
+        return True
+    if datetime.now(timezone.utc) - freshness_dt > timedelta(hours=max_age_hours):
+        return True
+    if not expected_after:
         return False
+    if not latest_received:
+        return True
     latest_dt = _parse_datetime(latest_received)
     expected_dt = _parse_datetime(expected_after)
     if not latest_dt or not expected_dt:
         return latest_received < expected_after
     return latest_dt < expected_dt
+
+
+def _age_hours(value: str | None) -> float | None:
+    parsed = _parse_datetime(value) if value else None
+    if parsed is None:
+        return None
+    return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 2)
 
 
 def _parse_datetime(value: str) -> datetime | None:
@@ -290,8 +345,16 @@ def _drafting_guardrail(
     latest_received: str | None,
     expected_after: str | None,
     hits: list[dict[str, Any]],
+    *,
+    latest_indexed_at: str | None = None,
+    max_age_hours: int = 72,
 ) -> str:
-    if _is_db_stale(latest_received, expected_after):
+    if _is_db_stale(
+        latest_received,
+        expected_after,
+        latest_indexed_at=latest_indexed_at,
+        max_age_hours=max_age_hours,
+    ):
         if hits:
             return (
                 "Latest requested mail may not be indexed. Use the current mail text as primary evidence "

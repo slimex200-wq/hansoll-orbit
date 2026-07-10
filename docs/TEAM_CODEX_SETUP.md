@@ -19,6 +19,8 @@ cd opencrab-Talbots
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_team_member.ps1
 ```
 
+The bootstrap installs dependencies into `.venv`. Subsequent manual OpenCrab commands should use `.\.venv\Scripts\python.exe` unless that environment is activated.
+
 If OneDrive cannot be detected automatically, pass the business source root:
 
 ```powershell

@@ -1,6 +1,6 @@
 # Talbots Workflow Rules
 
-Updated: 2026-05-26
+Updated: 2026-07-10
 
 ## Source Priority
 
@@ -52,6 +52,22 @@ Updated: 2026-05-26
 - Validate generated Excel layout before sharing or sending.
 - Human review is required before sending mail, sharing generated Excel, or acting on ambiguous color/status evidence.
 - If a generated form layout differs from the known template, treat it as a regression and fix the generator/spec before reuse.
+
+## Costing Recap Rules
+
+- For any request that says `costing recap`, `recap 정리`, or month/BM costing recap, do not create a new analysis-style workbook as the final deliverable.
+- First locate the existing season/division costing recap workbook, then copy that workbook or copy its relevant tab so the final file keeps the same header, merged cells, formulas, images, print area, column widths, row heights, and sheet naming pattern.
+- Evidence tables are internal working notes only. They may support the fill, but they must not replace the official Talbots recap layout.
+- For Outlet costing recap, keep KT/TXT/core/frontline/HWW/Haven divisions separate and use the nearby folder's naming and tab pattern.
+- If actual costing sheets do not exist yet for the requested styles, fill the recap with `TBD`, `REF`, or clearly marked reference values instead of presenting inferred YY/CM/FOB as final.
+- Before reporting completion, reopen the workbook in Excel or openpyxl and verify the key style cells, tab names, print area, template markers, and images. If the workbook does not visually resemble the existing recap, fix it before responding.
+
+## CEO Recap Rules
+
+- If the user says `CEO recap`, `ceo recap`, `TP photos`, `allocation recap`, or points to `Talbots\Development\<season>\OUTLET`, do not create or update a costing recap in the COSTING folder.
+- CEO recap deliverables belong under the Development season/division folder and should copy the nearby CEO recap workbook format, including allocation headers, BM schedule rows, TP/photo placement, print area, row heights, and the `T&A` sheet when present.
+- For SP'27 Outlet CEO recap work, use `Talbots\Development\SP27\OUTLET\SP27_Outlet_ceo_recap_TP_photos_filled.xlsx` as the first template/source unless the user names another file.
+- If mail provides new allocation rows but row-level projection, MOQ/MCQ, SY, or CEO dates are blank, leave those cells blank or `TBD`; do not pull values from costing references.
 
 ## SBD / ACC CPO Order Recap Rules
 

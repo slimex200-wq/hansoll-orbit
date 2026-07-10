@@ -2,13 +2,12 @@
 
 This workspace is a local business workbench, not the raw business data folder.
 
-- Canonical Codex project root: `C:\Users\shjung1\OpenCrab-Talbots`
-- Actual git workspace target: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
-- `C:\Users\shjung1\OpenCrab-Talbots` is a Windows junction to the actual git workspace. Use the canonical path when opening new Codex chats.
+- Canonical Codex project root: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
 - Do not use `C:\Users\shjung1\OpenCrab` for Talbots work; that is the base OpenCrab repo and lacks this project's Talbots rules/handoff.
 - Business source root is configured by `.env` as `OPENCRAB_SOURCE_ROOT`.
 - Talbots source files live in OneDrive and remain the source of truth.
 - Local SQLite indexes under `data/` are search indexes, not final evidence by themselves.
+- On Windows, use `.\.venv\Scripts\python.exe` for project commands when the virtual environment exists. Plain `python` examples assume that `.venv` is activated.
 
 ## Identity
 

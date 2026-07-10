@@ -14,6 +14,8 @@ cd opencrab-Talbots
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_team_member.ps1
 ```
 
+The bootstrap installs dependencies into `.venv`. Use `.\.venv\Scripts\python.exe` for manual OpenCrab commands unless that environment is activated; a different system Python can otherwise build partial indexes when a declared parser such as `pypdf` is missing.
+
 Then open the cloned folder in Codex and type:
 
 ```text
@@ -27,10 +29,8 @@ See [docs/TEAM_CODEX_SETUP.md](docs/TEAM_CODEX_SETUP.md) for OneDrive path, inde
 Open this project root. This is the fixed path to use for every new Codex chat:
 
 ```text
-C:\Users\shjung1\OpenCrab-Talbots
+C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab
 ```
-
-`C:\Users\shjung1\OpenCrab-Talbots` is a Windows junction to the actual git workspace at `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`.
 
 Do not open `C:\Users\shjung1\OpenCrab` for Talbots work. That folder is the base OpenCrab repo and does not carry the Park Daeri/Talbots handoff.
 
@@ -115,6 +115,7 @@ OPENCRAB_STYLE_DB_PATH=data\business_style_index.sqlite
 OPENCRAB_MAIL_DB_PATH=data\mail_thin_ontology.sqlite
 OPENCRAB_VISUAL_DB_PATH=data\visual_sketch_index.sqlite
 OPENCRAB_MAX_MAIL_AGE_HOURS=72
+OPENCRAB_MAX_INDEX_AGE_HOURS=168
 OPENCRAB_LAYOUT_SPEC_DIR=knowledge\workbook_layout_specs
 ```
 
@@ -150,7 +151,7 @@ Require fresh mail only before mail-dependent work:
 python -m opencrab_starter.cli preflight --require-indexes --require-fresh-mail
 ```
 
-Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. The latest received mail date remains available as evidence.
+Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. File, style, and visual index freshness use `OPENCRAB_MAX_INDEX_AGE_HOURS`. The latest received and indexed timestamps remain available as evidence.
 
 For a production-readiness summary with next actions:
 
@@ -158,6 +159,8 @@ For a production-readiness summary with next actions:
 python -m opencrab_starter.cli audit
 python -m opencrab_starter.cli audit --require-fresh-mail
 ```
+
+Production audit requires the core file and style indexes, checks their age, and reports style parser failures. `--require-fresh-mail` additionally makes stale mail a blocking failure.
 
 ## Production Smoke Check
 
@@ -220,10 +223,11 @@ python .\scripts\visual_sketch_index.py search `
 
 The index is intentionally thin: style number, source path, image location, nearby text, a small vector, and an optional thumbnail. It does not copy raw tech packs or WIP files into the repository.
 
-List project rules:
+Read project rules (the default prints their contents so a fresh session actually receives them):
 
 ```powershell
 python -m opencrab_starter.cli rules
+python -m opencrab_starter.cli rules --names-only
 ```
 
 Find prior mail context before drafting:

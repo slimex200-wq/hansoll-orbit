@@ -11,6 +11,7 @@ import sys
 import warnings
 import zipfile
 import zlib
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -286,12 +287,16 @@ def zip_texts(archive: zipfile.ZipFile, prefix: str, suffix: str) -> dict[str, s
             root = ElementTree.fromstring(archive.read(name))
         except Exception:
             continue
-        parts = [element.text.strip() for element in root.iter() if element.text and element.text.strip()]
+        parts = [
+            element.text.strip() for element in root.iter() if element.text and element.text.strip()
+        ]
         texts[name] = normalize_text(" ".join(parts))[:1200]
     return texts
 
 
-def extract_zip_media(path: Path, root: Path, prefix: str, text_prefix: str, text_suffix: str, source: str) -> list[SketchRecord]:
+def extract_zip_media(
+    path: Path, root: Path, prefix: str, text_prefix: str, text_suffix: str, source: str
+) -> list[SketchRecord]:
     records: list[SketchRecord] = []
     relative_path = str(path.relative_to(root))
     top_folder = Path(relative_path).parts[0] if Path(relative_path).parts else ""
@@ -373,15 +378,27 @@ def extract_image_file(path: Path, root: Path) -> list[SketchRecord]:
     ]
 
 
-def extract_records(path: Path, root: Path, max_pdf_pages: int) -> tuple[str, list[SketchRecord], str | None]:
+def extract_records(
+    path: Path, root: Path, max_pdf_pages: int
+) -> tuple[str, list[SketchRecord], str | None]:
     suffix = path.suffix.lower()
     try:
         if suffix in {".xlsx", ".xlsm"}:
             return "parsed", extract_xlsx_images(path, root), None
         if suffix == ".pptx":
-            return "parsed", extract_zip_media(path, root, "ppt/media/", "ppt/slides/", ".xml", "pptx_media"), None
+            return (
+                "parsed",
+                extract_zip_media(path, root, "ppt/media/", "ppt/slides/", ".xml", "pptx_media"),
+                None,
+            )
         if suffix == ".docx":
-            return "parsed", extract_zip_media(path, root, "word/media/", "word/document.xml", ".xml", "docx_media"), None
+            return (
+                "parsed",
+                extract_zip_media(
+                    path, root, "word/media/", "word/document.xml", ".xml", "docx_media"
+                ),
+                None,
+            )
         if suffix == ".pdf":
             return "parsed", extract_pdf_images(path, root, max_pdf_pages), None
         if suffix in SUPPORTED_IMAGE_EXTENSIONS:
@@ -393,7 +410,7 @@ def extract_records(path: Path, root: Path, max_pdf_pages: int) -> tuple[str, li
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -469,6 +486,30 @@ def iter_files(root: Path, include_tops: set[str], path_contains: list[str]) -> 
                 yield path
 
 
+def prune_missing_files(
+    conn: sqlite3.Connection,
+    *,
+    active_tops: set[str] | None,
+    seen_paths: set[str],
+) -> int:
+    if active_tops is not None:
+        if not active_tops:
+            return 0
+        placeholders = ",".join("?" for _ in active_tops)
+        rows = conn.execute(
+            f"SELECT path FROM files WHERE top_folder IN ({placeholders})",
+            sorted(active_tops),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT path FROM files").fetchall()
+    stale_paths = [path for (path,) in rows if path not in seen_paths]
+    if not stale_paths:
+        return 0
+    conn.executemany("DELETE FROM sketches WHERE path = ?", ((path,) for path in stale_paths))
+    conn.executemany("DELETE FROM files WHERE path = ?", ((path,) for path in stale_paths))
+    return len(stale_paths)
+
+
 def sketch_id_for(record: SketchRecord, features: ImageFeatures) -> str:
     material = f"{record.source_path}|{record.location}|{features.sha256}"
     return hashlib.sha256(material.encode("utf-8", "ignore")).hexdigest()[:24]
@@ -490,8 +531,16 @@ def index_file(
         stat = path.stat()
     except OSError as exc:
         return 0, 1, f"stat_error: {exc}", 0
-    existing = conn.execute("SELECT size, mtime_ns FROM files WHERE path = ?", (str(path),)).fetchone()
-    if not force and existing and existing[0] == stat.st_size and existing[1] == stat.st_mtime_ns:
+    existing = conn.execute(
+        "SELECT size, mtime_ns, parse_status FROM files WHERE path = ?", (str(path),)
+    ).fetchone()
+    if (
+        not force
+        and existing
+        and existing[0] == stat.st_size
+        and existing[1] == stat.st_mtime_ns
+        and existing[2] != "error"
+    ):
         return 0, 0, "unchanged", 0
 
     status, records, error = extract_records(path, root, max_pdf_pages)
@@ -572,32 +621,38 @@ def index_file(
 
 def build_index(args: argparse.Namespace) -> int:
     root = args.root.expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"source root is missing or not a directory: {root}")
     db_path = args.db.expanduser()
     if args.reset and db_path.exists():
         db_path.unlink()
     thumb_dir = args.thumb_dir.expanduser() if args.thumb_dir else None
     init_db(db_path)
 
-    run_id = "visual-sketch-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = "visual-sketch-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     started_at = utc_now()
     stats = {
         "root": str(root),
         "include_tops": sorted(args.include_top or []),
         "path_contains": args.path_contains or [],
+        "max_files": args.max_files,
         "files_seen": 0,
         "files_indexed": 0,
         "files_error": 0,
         "unchanged": 0,
+        "files_pruned": 0,
         "images_indexed": 0,
         "by_status": {},
     }
     include_tops = set(args.include_top or [])
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
         )
+        seen_paths: set[str] = set()
         for path in iter_files(root, include_tops, args.path_contains or []):
+            seen_paths.add(str(path))
             stats["files_seen"] += 1
             indexed, errored, status, image_count = index_file(
                 conn,
@@ -619,6 +674,15 @@ def build_index(args: argparse.Namespace) -> int:
             if stats["files_seen"] % args.progress_every == 0:
                 conn.commit()
                 print(json.dumps(stats, ensure_ascii=False), flush=True)
+        if not (args.path_contains or []) and not args.max_files:
+            active_tops = (
+                {top for top in include_tops if (root / top).is_dir()} if include_tops else None
+            )
+            stats["files_pruned"] = prune_missing_files(
+                conn,
+                active_tops=active_tops,
+                seen_paths=seen_paths,
+            )
         completed_at = utc_now()
         conn.execute(
             "UPDATE ingest_runs SET completed_at = ?, stats_json = ? WHERE run_id = ?",
@@ -626,8 +690,21 @@ def build_index(args: argparse.Namespace) -> int:
         )
         conn.commit()
         total_sketches = conn.execute("SELECT COUNT(*) FROM sketches").fetchone()[0]
-        total_styles = conn.execute("SELECT COUNT(DISTINCT style_no) FROM sketches WHERE style_no IS NOT NULL").fetchone()[0]
-    print(json.dumps({"run_id": run_id, "total_sketches": total_sketches, "total_styles": total_styles, **stats}, ensure_ascii=False, indent=2))
+        total_styles = conn.execute(
+            "SELECT COUNT(DISTINCT style_no) FROM sketches WHERE style_no IS NOT NULL"
+        ).fetchone()[0]
+    print(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "total_sketches": total_sketches,
+                "total_styles": total_styles,
+                **stats,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -638,7 +715,7 @@ def search_index(args: argparse.Namespace) -> int:
         print(json.dumps({"error": "query image could not be vectorized"}, ensure_ascii=False))
         return 2
     query_vector = features.vector
-    with sqlite3.connect(args.db.expanduser()) as conn:
+    with closing(sqlite3.connect(args.db.expanduser())) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

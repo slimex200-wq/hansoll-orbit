@@ -1,7 +1,18 @@
 {
+  "sheet_count": {
+    "min": 1
+  },
   "sheets": [
     {
-      "name": "FL26 OUTLET RA",
+      "match": {
+        "anchors": {
+          "A3": "Dept",
+          "B3": "STYLE #"
+        }
+      },
+      "match_count": {
+        "min": 1
+      },
       "required_values": {
         "A3": "Dept",
         "B3": "STYLE #",
@@ -30,7 +41,10 @@
         "F3:F4",
         "G3:G4",
         "H3:H4"
-      ]
+      ],
+      "image_count": {
+        "min": 1
+      }
     }
   ]
 }

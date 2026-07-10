@@ -6,13 +6,20 @@ import shutil
 import sqlite3
 import stat
 import zipfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 
 DEFAULT_KEEP_DIRS = {"outputs/final", "outputs/keep"}
-DEFAULT_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".test_tmp"}
+DEFAULT_CACHE_DIR_NAMES = {
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".test_tmp",
+}
 DATA_SUFFIXES = {".sqlite", ".sqlite3", ".db", ".duckdb"}
 
 
@@ -72,7 +79,9 @@ def should_keep(path: Path, keep_dirs: set[Path]) -> bool:
     return any(resolved == keep or is_relative_to(resolved, keep) for keep in keep_dirs)
 
 
-def collect_output_candidates(root: Path, older_than_days: int, keep_dirs: set[Path]) -> list[Candidate]:
+def collect_output_candidates(
+    root: Path, older_than_days: int, keep_dirs: set[Path]
+) -> list[Candidate]:
     outputs = root / "outputs"
     if not outputs.exists():
         return []
@@ -128,7 +137,9 @@ def zip_is_valid(path: Path) -> bool:
         return False
 
 
-def collect_expanded_zip_sibling_candidates(root: Path, enabled: bool, keep_dirs: set[Path]) -> list[Candidate]:
+def collect_expanded_zip_sibling_candidates(
+    root: Path, enabled: bool, keep_dirs: set[Path]
+) -> list[Candidate]:
     if not enabled:
         return []
     outputs = root / "outputs"
@@ -192,7 +203,7 @@ def vacuum_databases(root: Path) -> list[tuple[Path, int, int]]:
             continue
         before = path.stat().st_size
         try:
-            with sqlite3.connect(path) as conn:
+            with closing(sqlite3.connect(path)) as conn, conn:
                 conn.execute("VACUUM")
         except sqlite3.DatabaseError:
             continue
@@ -207,7 +218,12 @@ def main() -> int:
     )
     parser.add_argument("--apply", action="store_true", help="Actually delete candidates.")
     parser.add_argument("--outputs-older-than-days", type=int, default=14)
-    parser.add_argument("--keep-dir", action="append", default=[], help="Extra workspace-relative directory to keep.")
+    parser.add_argument(
+        "--keep-dir",
+        action="append",
+        default=[],
+        help="Extra workspace-relative directory to keep.",
+    )
     parser.add_argument("--skip-outputs", action="store_true", help="Do not clean outputs.")
     parser.add_argument("--skip-caches", action="store_true", help="Do not clean tool caches.")
     parser.add_argument(
@@ -220,7 +236,9 @@ def main() -> int:
         action="store_true",
         help="Delete expanded output folders only when a valid same-name .zip sibling exists.",
     )
-    parser.add_argument("--vacuum-data", action="store_true", help="Compact sqlite databases under data/.")
+    parser.add_argument(
+        "--vacuum-data", action="store_true", help="Compact sqlite databases under data/."
+    )
     args = parser.parse_args()
 
     root = workspace_root()
@@ -230,7 +248,9 @@ def main() -> int:
         candidates.extend(collect_output_candidates(root, args.outputs_older_than_days, keep_dirs))
     if not args.skip_caches:
         candidates.extend(collect_cache_candidates(root))
-    candidates.extend(collect_expanded_zip_sibling_candidates(root, args.remove_expanded_zip_siblings, keep_dirs))
+    candidates.extend(
+        collect_expanded_zip_sibling_candidates(root, args.remove_expanded_zip_siblings, keep_dirs)
+    )
     candidates.extend(collect_node_modules_candidate(root, args.include_node_modules))
 
     total_size = sum(candidate.size for candidate in candidates)

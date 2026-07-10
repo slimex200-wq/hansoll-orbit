@@ -51,7 +51,16 @@ def main() -> None:
     )
     style_stats_parser.add_argument("--style-db")
 
-    subparsers.add_parser("rules", help="List project rule files")
+    rules_parser = subparsers.add_parser(
+        "rules",
+        help="Read the project rule files used by fresh Talbots sessions",
+    )
+    rules_parser.add_argument(
+        "--names-only",
+        action="store_true",
+        help="List rule filenames without printing their contents",
+    )
+    rules_parser.add_argument("--json", action="store_true")
 
     preflight_parser = subparsers.add_parser(
         "preflight",
@@ -125,6 +134,15 @@ def main() -> None:
     validate_parser.add_argument("--spec-name")
     validate_parser.add_argument("--json", action="store_true")
 
+    validate_sbd_parser = subparsers.add_parser(
+        "validate-sbd",
+        help="Validate a Talbots SBD workbook against core PO, total, and G/TOTAL rules",
+    )
+    validate_sbd_parser.add_argument("--workbook", required=True)
+    validate_sbd_parser.add_argument("--style")
+    validate_sbd_parser.add_argument("--expected-total", type=int)
+    validate_sbd_parser.add_argument("--json", action="store_true")
+
     layout_specs_parser = subparsers.add_parser(
         "layout-specs",
         help="List configured workbook layout validation specs",
@@ -186,8 +204,23 @@ def main() -> None:
         raise SystemExit(index_stats(style_args))
 
     if args.command == "rules":
-        rules = load_rule_files(config.workspace / "knowledge")
-        print(json.dumps([name for name, _ in rules], ensure_ascii=False, indent=2))
+        rules = load_rule_files((config.project_root or config.workspace) / "knowledge")
+        if args.names_only:
+            print(json.dumps([name for name, _ in rules], ensure_ascii=False, indent=2))
+        elif args.json:
+            print(
+                json.dumps(
+                    [{"name": name, "content": content} for name, content in rules],
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            for index, (name, content) in enumerate(rules):
+                if index:
+                    print()
+                print(f"===== {name} =====")
+                print(content.rstrip())
         return
 
     if args.command == "preflight":
@@ -214,6 +247,7 @@ def main() -> None:
             sender=args.sender,
             expected_after=args.expected_after,
             limit=args.limit,
+            max_age_hours=config.max_mail_age_hours,
         )
         print(json.dumps(context, ensure_ascii=False, indent=2))
         return
@@ -331,13 +365,38 @@ def main() -> None:
     if args.command == "validate-workbook":
         from scripts.validate_workbook_layout import validate_workbook
 
-        spec_path = resolve_spec_path(args.spec, args.spec_name, config.layout_spec_dir, config.workspace)
+        spec_path = resolve_spec_path(
+            args.spec,
+            args.spec_name,
+            config.layout_spec_dir,
+            config.project_root or config.workspace,
+        )
         workbook_path = resolve_workspace_path(args.workbook, None, config.workspace)
         assert spec_path is not None
         assert workbook_path is not None
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         findings = validate_workbook(workbook_path, spec)
         ok = all(item.ok for item in findings)
+        if args.json:
+            print(json.dumps([item.__dict__ for item in findings], ensure_ascii=False, indent=2))
+        else:
+            print("PASS" if ok else "FAIL")
+            for item in findings:
+                mark = "OK" if item.ok else "ERR"
+                print(f"- {mark} {item.code}: {item.detail}")
+        raise SystemExit(0 if ok else 1)
+
+    if args.command == "validate-sbd":
+        from .sbd_validator import findings_ok, validate_sbd_workbook
+
+        workbook_path = resolve_workspace_path(args.workbook, None, config.workspace)
+        assert workbook_path is not None
+        findings = validate_sbd_workbook(
+            workbook_path,
+            style=args.style,
+            expected_total=args.expected_total,
+        )
+        ok = findings_ok(findings)
         if args.json:
             print(json.dumps([item.__dict__ for item in findings], ensure_ascii=False, indent=2))
         else:

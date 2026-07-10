@@ -1,6 +1,6 @@
 # Current Session Handoff - OpenCrab Talbots
 
-Updated: 2026-05-26
+Updated: 2026-07-10
 
 This file exists so a fresh Codex chat can behave like the current long-running "Park Daeri" session.
 
@@ -12,9 +12,7 @@ The user does not primarily want git/worktree engineering workflows. They want a
 
 ## Workspace
 
-- Canonical Codex project root: `C:\Users\shjung1\OpenCrab-Talbots`
-- Actual git workspace target: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
-- `C:\Users\shjung1\OpenCrab-Talbots` is a Windows junction to the actual git workspace. Use it when opening multiple Codex chats.
+- Canonical Codex project root: `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`
 - Do not use `C:\Users\shjung1\OpenCrab` for Talbots work; that is the base OpenCrab repo and does not include this Talbots handoff.
 - Source root from `.env`: `C:\Users\shjung1\OneDrive - 한솔섬유`
 - Talbots source folder: `C:\Users\shjung1\OneDrive - 한솔섬유\Talbots`
@@ -51,21 +49,21 @@ If a very recent mail is needed and not indexed, ask the user for the pasted mai
 
 ## Current Indexed State
 
-Last verified audit status from `C:\Users\shjung1\OpenCrab-Talbots`:
+Last verified audit status from `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`:
 
 - thin file index: 8,277 rows
 - business style index: 118,866 rows
-- mail index: 9,327 rows
+- mail index: 12,710 rows
 - visual sketch index: 1,263 rows
 - layout specs: 3
 - project rules: 4
-- mail index freshness: within 72 hours
+- production audit: blocked as of 2026-07-10 because file/style/visual indexes are stale, 99 historical style parse failures were caused by a missing `pypdf`, and mail freshness exceeds 72 hours
 
-Last refresh verified on 2026-05-22 KST:
+Last verified index timestamps as of 2026-07-10 KST:
 
 - file index latest indexed: 2026-05-22 11:16 KST
 - style index latest indexed: 2026-05-22 11:20 KST
-- mail latest received/indexed: 2026-05-22 11:10 KST
+- mail latest received/indexed: 2026-06-22 11:53 KST
 - visual sketch latest indexed: 2026-05-22 11:20 KST
 
 ## Operating Style
@@ -97,6 +95,8 @@ Last refresh verified on 2026-05-22 KST:
 16. SP'27 HWW Feb-Mar TP files may be split between `OneDrive - 한솔섬유\Attachments` and `Talbots\Development\TP\Done`. If `style-search` misses the styles, search OneDrive filenames and verify the PDF text before sharing.
 17. For difficult multi-source work, use the Evidence-First Reliability Protocol: ingest/audit first, build an evidence table, apply no-source-no-fill, fill or draft only from cited sources, then verify output against the evidence table.
 18. For Talbots SBD/ACC CPO work, `CPO X Ref` (`3016...`) is `Master PO` and `CPO No` (`650...`/`651...`) is `Sub PO`. Always verify PO fields together with `C3`/grand total before saying the SBD is complete.
+19. For costing recap work, never make a new analysis-table workbook as the final deliverable. Copy the existing season/division recap workbook or relevant tab first, preserve the official layout, and use evidence tables only as internal notes.
+20. CEO recap and costing recap are different deliverables. If the user points to `Talbots\Development\<season>\OUTLET` or says CEO recap/TP photos/allocation recap, work from the Development CEO recap workbook, not the COSTING folder.
 
 ## Template And Source Map
 
@@ -140,6 +140,10 @@ When Korean paths display as mojibake in PowerShell, rely on `.env`, `opencrab_s
 
 ## Recent Corrections
 
+- SP'27 OUTLET APR work was clarified by the user as CEO recap, not costing recap. Correct CEO recap output is `Talbots\Development\SP27\OUTLET\SP27_Outlet_APR_TXT_ceo_recap_TP_photos_filled.xlsx`, copied from `SP27_Outlet_ceo_recap_TP_photos_filled.xlsx`, with `APR TXT` + `T&A` sheets and styles `271952230`, `271952238`, `271952239`, `271952240`. Future CEO recap work must stay in Development and preserve the allocation/TP photos format.
+- Do not assume SP'27 APR OUTLET is TXT only. For Outlet Knit Tops, also check `SPRING 27 / TALBOTS OUTLET/ KNIT TOPS / LAB DIP REQUEST`; the 2026-05-23 Demetra mail says the Spring 27 lab dip chart was updated with April BM dips/new additions dated 2026-05-22.
+- For SP'27 Dress/Knit Dresses APR BM, the exact subject `Knit Dresses- April BM- Outlet` may not appear in the mailbox search. Cross-check `Talbots\Development\SP27\SP27_FEB MAR APR BM_MGF LP SAMPLE TRACKING CHART_DRESS.xlsx` and the `SP'27-MGF K- DRESS (FL26022055 KNIT TEXTURE JACQUARD ) - HANSOLL` thread before concluding no dress evidence exists.
+- SP'27 OUTLET APR costing recap initially failed because the first output was an analysis-style workbook instead of the existing Talbots costing recap format. Corrected file now copies `SP'27 OUTLET COSTING RECAP.xlsx`, keeps an `APR TXT` tab in the original A:Z recap layout, and includes styles `271952230`, `271952238`, `271952239`, and `271952240`. Use this only when the user explicitly asks for costing recap.
 - The combined SP27 OUTLET MAR BM costing workbook was wrong because the user expected one file per style.
 - Corrected SP27 MAR allocation costing generated 11 individual files:
   - 271900010
@@ -174,6 +178,22 @@ If the user asks for a form or dispatch:
 8. Report verified facts, assumptions, and remaining risks separately.
 
 If a new chat starts making HTML-like tables or generic forms, stop and redirect to the real Excel templates.
+
+If the user asks for a costing recap:
+
+1. Locate the season/division costing recap workbook first.
+2. Copy the workbook or the relevant tab before filling anything.
+3. Preserve the same visual layout, formulas, print area, images, merged cells, and naming pattern.
+4. Use `TBD`/`REF` when the source does not support final YY, CM, FOB, or trim values.
+5. Do not deliver a standalone evidence table workbook as the final costing recap.
+
+If the user asks for a CEO recap / TP photos / allocation recap:
+
+1. Go to the Development season/division folder first, not COSTING.
+2. Copy the nearby CEO recap workbook such as `SP27_Outlet_ceo_recap_TP_photos_filled.xlsx`.
+3. Preserve the allocation headers, BM schedule rows, TP/photo layout, print area, row heights, and `T&A` sheet.
+4. Fill only mail/allocation-supported row values; leave projection, MOQ/MCQ, SY, and CEO blank or `TBD` if the mail does not provide them.
+5. Reopen in Excel and verify style rows plus picture count before reporting completion.
 
 ## Current Runtime Judgment Tool
 

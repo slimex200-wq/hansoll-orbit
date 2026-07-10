@@ -53,14 +53,7 @@ def item_text(item: object) -> tuple[str, str, str, str, str]:
     received = rfc_date(getattr(item, "ReceivedTime"))
     entry_id = str(getattr(item, "EntryID", "") or "")
     body = str(getattr(item, "Body", "") or "")
-    text = (
-        f"Subject: {subject}\n"
-        f"From: {sender}\n"
-        f"Date: {received}\n"
-        f"EntryID: {entry_id}\n"
-        "\n"
-        f"{body}"
-    )
+    text = f"Subject: {subject}\nFrom: {sender}\nDate: {received}\nEntryID: {entry_id}\n\n{body}"
     return subject, sender, received, entry_id, text
 
 

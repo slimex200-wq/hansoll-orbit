@@ -9,6 +9,7 @@ import re
 import sqlite3
 import sys
 import zlib
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email import policy
@@ -198,7 +199,7 @@ def parse_mail(path: Path, indexed_at: str) -> MailRecord:
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS mails (
@@ -299,7 +300,7 @@ def build_index(args: argparse.Namespace) -> int:
         "files_error": 0,
         "path_contains": args.path_contains or [],
     }
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
@@ -341,7 +342,7 @@ def build_index(args: argparse.Namespace) -> int:
 
 def status(args: argparse.Namespace) -> int:
     init_db(args.db)
-    with sqlite3.connect(args.db) as conn:
+    with closing(sqlite3.connect(args.db)) as conn, conn:
         stats = {
             "db": str(args.db),
             "mail_count": conn.execute("SELECT COUNT(*) FROM mails").fetchone()[0],
@@ -356,7 +357,9 @@ def status(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build and inspect a thin local mail context index.")
+    parser = argparse.ArgumentParser(
+        description="Build and inspect a thin local mail context index."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     build = subparsers.add_parser("build", help="Index exported mail files.")

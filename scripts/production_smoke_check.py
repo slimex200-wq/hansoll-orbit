@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,10 +18,12 @@ REQUIRED_FILES = [
     ".env.example",
     "opencrab_starter/cli.py",
     "opencrab_starter/config.py",
+    "opencrab_starter/decision_engine.py",
     "opencrab_starter/thin_index.py",
     "opencrab_starter/mail_history.py",
     "opencrab_starter/preflight.py",
     "opencrab_starter/production_audit.py",
+    "opencrab_starter/sbd_validator.py",
     "scripts/cleanup_generated_artifacts.py",
     "scripts/export_outlook_recent_mail.py",
     "scripts/ingest_business_style_index.py",
@@ -30,12 +34,17 @@ REQUIRED_FILES = [
     "docs/PRODUCTION_RUNBOOK.md",
     "examples/workbook_layout_spec.example.json",
     "tests/test_business_style_index.py",
+    "tests/test_cli_rules.py",
     "tests/test_config.py",
     "tests/test_mail_history.py",
     "tests/test_mail_thin_ingest.py",
     "tests/test_outlook_export.py",
     "tests/test_preflight.py",
     "tests/test_production_audit.py",
+    "tests/test_production_smoke_check.py",
+    "tests/test_decision_engine.py",
+    "tests/test_sbd_validator.py",
+    "tests/test_thin_index.py",
     "tests/test_validate_workbook_layout.py",
     "tests/test_visual_sketch_index.py",
 ]
@@ -45,7 +54,13 @@ IGNORED_PRIVATE_PREFIXES = (
     "outputs/",
     "node_modules/",
     ".omx/",
+    "tmp/",
+    "opencrab_data/",
 )
+
+DEPENDENCY_IMPORT_OVERRIDES = {
+    "pillow": "PIL",
+}
 
 
 @dataclass(frozen=True)
@@ -79,10 +94,12 @@ def check_imports() -> str:
         "opencrab_starter",
         "opencrab_starter.cli",
         "opencrab_starter.config",
+        "opencrab_starter.decision_engine",
         "opencrab_starter.knowledge",
         "opencrab_starter.mail_history",
         "opencrab_starter.preflight",
         "opencrab_starter.production_audit",
+        "opencrab_starter.sbd_validator",
         "opencrab_starter.thin_index",
         "scripts.cleanup_generated_artifacts",
         "scripts.export_outlook_recent_mail",
@@ -120,6 +137,35 @@ def check_git_ignored_private_paths(root: Path) -> str:
     return "no private data/output/database paths tracked"
 
 
+def check_private_prefixes_ignored(root: Path) -> str:
+    git = root / ".git"
+    if not git.exists():
+        return "not a git checkout; skipped"
+
+    missing: list[str] = []
+    errors: list[str] = []
+    for prefix in IGNORED_PRIVATE_PREFIXES:
+        probe = f"{prefix}.opencrab-smoke-probe"
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--quiet", "--", probe],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.returncode == 1:
+            missing.append(prefix)
+        elif result.returncode != 0:
+            errors.append(f"{prefix}: {result.stderr.strip() or f'exit {result.returncode}'}")
+
+    if errors:
+        raise RuntimeError("git check-ignore failed: " + "; ".join(errors))
+    if missing:
+        raise RuntimeError("private/generated prefixes not ignored: " + ", ".join(missing))
+    return f"{len(IGNORED_PRIVATE_PREFIXES)} private/generated prefixes ignored"
+
+
 def check_requirements_match_pyproject(root: Path) -> str:
     requirements = {
         line.strip().lower()
@@ -131,6 +177,36 @@ def check_requirements_match_pyproject(root: Path) -> str:
     if missing:
         raise RuntimeError("requirements missing from pyproject: " + ", ".join(missing))
     return f"{len(requirements)} runtime requirements reflected in pyproject"
+
+
+def dependency_distribution_name(specification: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", specification)
+    if match is None:
+        raise RuntimeError(f"invalid runtime dependency: {specification!r}")
+    return match.group(1)
+
+
+def check_declared_runtime_dependencies(root: Path) -> str:
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = pyproject.get("project", {}).get("dependencies", [])
+    if not isinstance(dependencies, list) or not all(
+        isinstance(item, str) for item in dependencies
+    ):
+        raise RuntimeError("project.dependencies must be a list of strings")
+
+    failures: list[str] = []
+    for specification in dependencies:
+        distribution = dependency_distribution_name(specification)
+        normalized = distribution.lower().replace("-", "_").replace(".", "_")
+        module = DEPENDENCY_IMPORT_OVERRIDES.get(distribution.lower(), normalized)
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            failures.append(f"{distribution}: {type(exc).__name__}: {exc}")
+
+    if failures:
+        raise RuntimeError("runtime dependency imports failed: " + "; ".join(failures))
+    return f"{len(dependencies)} declared runtime dependencies import"
 
 
 def main() -> int:
@@ -145,7 +221,12 @@ def main() -> int:
         run_check("required_files", lambda: check_required_files(root)),
         run_check("imports", check_imports),
         run_check("git_private_paths", lambda: check_git_ignored_private_paths(root)),
+        run_check("git_ignore_rules", lambda: check_private_prefixes_ignored(root)),
         run_check("requirements", lambda: check_requirements_match_pyproject(root)),
+        run_check(
+            "runtime_dependencies",
+            lambda: check_declared_runtime_dependencies(root),
+        ),
     ]
     ok = all(item.ok for item in checks)
     if args.json:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,7 +38,7 @@ class IndexedFile:
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -52,6 +54,16 @@ def init_db(db_path: Path) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_relative_path ON files(relative_path)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ingest_runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                stats_json TEXT NOT NULL
+            )
+            """
+        )
 
 
 def fingerprint_file(path: Path, sample_bytes: int = 65536) -> str:
@@ -94,10 +106,23 @@ def iter_supported_files(source_root: Path) -> list[IndexedFile]:
 
 
 def build_index(source_root: Path, db_path: Path) -> int:
+    source_root = source_root.expanduser().resolve()
+    if not source_root.is_dir():
+        raise FileNotFoundError(f"source root is missing or not a directory: {source_root}")
     init_db(db_path)
     indexed_at = datetime.now(UTC).isoformat()
+    run_id = "thin-index-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     files = iter_supported_files(source_root)
-    with sqlite3.connect(db_path) as conn:
+    stats = {"root": str(source_root), "files_seen": len(files), "files_pruned": 0}
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            "INSERT INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
+            (run_id, indexed_at, None, json.dumps(stats)),
+        )
+        conn.execute("CREATE TEMP TABLE current_paths(path TEXT PRIMARY KEY)")
+        conn.executemany(
+            "INSERT INTO current_paths(path) VALUES (?)", ((str(item.path),) for item in files)
+        )
         conn.executemany(
             """
             INSERT INTO files (
@@ -125,13 +150,22 @@ def build_index(source_root: Path, db_path: Path) -> int:
                 for item in files
             ],
         )
+        cursor = conn.execute(
+            "DELETE FROM files WHERE path NOT IN (SELECT path FROM current_paths)"
+        )
+        stats["files_pruned"] = cursor.rowcount
+        completed_at = datetime.now(UTC).isoformat()
+        conn.execute(
+            "UPDATE ingest_runs SET completed_at = ?, stats_json = ? WHERE run_id = ?",
+            (completed_at, json.dumps(stats), run_id),
+        )
     return len(files)
 
 
 def search_index(db_path: Path, query: str, limit: int = 20) -> list[dict[str, object]]:
     init_db(db_path)
     like = f"%{query}%"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

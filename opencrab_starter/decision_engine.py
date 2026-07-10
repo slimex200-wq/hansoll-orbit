@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import OpenCrabConfig
+from .knowledge import load_rule_files
 from .mail_history import extract_search_terms, extract_style_numbers, load_mail_context
 
 
@@ -36,6 +37,16 @@ CONCEPT_KEYWORDS: dict[str, list[str]] = {
         "solid",
         "print",
         "stripe",
+    ],
+    "ceo_recap": [
+        "ceo recap",
+        "ceo 리캡",
+        "tp photos",
+        "tp photo",
+        "tp 사진",
+        "allocation recap",
+        "allocation 리캡",
+        "development recap",
     ],
     "costing": [
         "costing",
@@ -108,6 +119,7 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
 
 STYLE_DEPENDENT_CONCEPTS = {
     "color_submit",
+    "ceo_recap",
     "costing",
     "wip_update",
     "tp_bom_review",
@@ -124,7 +136,9 @@ def judge_query(
     limit: int = 8,
 ) -> dict[str, Any]:
     classification = classify_query(query)
-    evidence = gather_evidence(config, query, classification, sender=sender, expected_after=expected_after, limit=limit)
+    evidence = gather_evidence(
+        config, query, classification, sender=sender, expected_after=expected_after, limit=limit
+    )
     decisions = build_decisions(classification, evidence)
     return {
         "query": query,
@@ -143,12 +157,20 @@ def classify_query(query: str) -> dict[str, Any]:
         concept: sum(1 for keyword in keywords if keyword in normalized)
         for concept, keywords in CONCEPT_KEYWORDS.items()
     }
-    concepts = [concept for concept, score in sorted(concept_scores.items(), key=lambda item: item[1], reverse=True) if score]
+    concepts = [
+        concept
+        for concept, score in sorted(concept_scores.items(), key=lambda item: item[1], reverse=True)
+        if score
+    ]
     intent_scores = {
         intent: sum(1 for keyword in keywords if keyword in normalized)
         for intent, keywords in INTENT_KEYWORDS.items()
     }
-    intents = [intent for intent, score in sorted(intent_scores.items(), key=lambda item: item[1], reverse=True) if score]
+    intents = [
+        intent
+        for intent, score in sorted(intent_scores.items(), key=lambda item: item[1], reverse=True)
+        if score
+    ]
     seasons = _detect_seasons(normalized)
     divisions = _detect_divisions(normalized)
     primary_concept = concepts[0] if concepts else "general_business_lookup"
@@ -179,14 +201,29 @@ def gather_evidence(
     styles = classification["styles"]
     terms = classification["terms"]
     style_hits = search_style_hits(config.style_db_path, styles, query, terms, limit=limit)
-    facts = search_facts(config.workspace / "data" / "talbots_thin_ontology.sqlite", styles, query, terms, limit=limit)
-    sketches = search_sketches(config.visual_db_path, styles, query, terms, limit=max(3, limit // 2))
+    facts = search_facts(
+        config.workspace / "data" / "talbots_thin_ontology.sqlite",
+        styles,
+        query,
+        terms,
+        limit=limit,
+    )
+    sketches = search_sketches(
+        config.visual_db_path, styles, query, terms, limit=max(3, limit // 2)
+    )
+    project_rules = match_project_rules(
+        (config.project_root or config.workspace) / "knowledge",
+        query,
+        classification,
+        limit=limit,
+    )
     mail_context = load_mail_context(
         config.mail_db_path,
         query,
         sender=sender,
         expected_after=expected_after,
         limit=limit,
+        max_age_hours=config.max_mail_age_hours,
     )
     return {
         "style_index": {
@@ -209,11 +246,16 @@ def gather_evidence(
             "available": mail_context.get("available", False),
             "mail_count": mail_context.get("mail_count"),
             "latest_received": mail_context.get("latest_received"),
+            "latest_indexed_at": mail_context.get("latest_indexed_at"),
+            "freshness_source": mail_context.get("freshness_source"),
+            "max_age_hours": mail_context.get("max_age_hours", config.max_mail_age_hours),
+            "age_hours": mail_context.get("age_hours"),
             "db_may_be_stale": mail_context.get("db_may_be_stale"),
             "hit_count": len(mail_context.get("hits", [])),
             "top_hits": mail_context.get("hits", [])[:limit],
             "guardrail": mail_context.get("drafting_guardrail") or mail_context.get("error"),
         },
+        "project_rules": project_rules,
         "observed_context": summarize_observed_context(style_hits, facts),
     }
 
@@ -281,6 +323,7 @@ def build_nine_spaces(
         "policy": {
             "source_label": "정책",
             "value": decisions["applicable_policies"],
+            "rule_evidence": evidence.get("project_rules", {}),
         },
         "strategy": {
             "source_label": "전략",
@@ -299,6 +342,68 @@ def build_nine_spaces(
             "note": "Not counted as one of the 9 spaces in the Kakao source; kept as metadata when needed.",
             "latest_mail_received": evidence["mail_index"]["latest_received"],
         },
+    }
+
+
+def match_project_rules(
+    knowledge_dir: Path,
+    query: str,
+    classification: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    loaded_rules = load_rule_files(knowledge_dir)
+    rules = sorted(
+        loaded_rules,
+        key=lambda item: (item[0].lower() != "talbots_workflow_rules.md", item[0].lower()),
+    )
+    concept = str(classification.get("primary_concept") or "")
+    concept_terms = CONCEPT_KEYWORDS.get(concept, [])
+    query_terms = extract_search_terms(query, max_terms=20)
+    match_terms = _ordered_unique(
+        term.lower() for term in [*concept_terms, *query_terms] if len(term.strip()) >= 3
+    )
+    normalized_concept_terms = [term.lower() for term in concept_terms]
+    candidates: list[dict[str, Any]] = []
+    for name, content in rules:
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            text = " ".join(raw_line.split())
+            if not text:
+                continue
+            normalized = text.lower()
+            matched_terms = [term for term in match_terms if term in normalized]
+            if not matched_terms:
+                continue
+            matched_concept_terms = [
+                term for term in normalized_concept_terms if term in normalized
+            ]
+            candidates.append(
+                {
+                    "file": name,
+                    "line": line_number,
+                    "text": _compact(text, 360),
+                    "matched_terms": matched_terms,
+                    "matched_concept_terms": matched_concept_terms,
+                }
+            )
+    candidates.sort(
+        key=lambda item: (
+            len(item["matched_concept_terms"]),
+            len(item["matched_terms"]),
+            sum(len(term) for term in item["matched_terms"]),
+        ),
+        reverse=True,
+    )
+    matches = candidates[: max(1, limit)]
+    matched_files = _ordered_unique(item["file"] for item in matches)
+    return {
+        "knowledge_dir": str(knowledge_dir),
+        "loaded_count": len(loaded_rules),
+        "loaded_files": [name for name, _ in loaded_rules],
+        "match_terms": match_terms,
+        "matched_count": len(matches),
+        "matched_files": matched_files,
+        "matches": matches,
     }
 
 
@@ -383,7 +488,9 @@ def search_facts(
             likes = _search_likes([query, *terms])
             if not likes:
                 return []
-            where = " or ".join(["raw_compact like ? or description like ? or relative_path like ?" for _ in likes])
+            where = " or ".join(
+                ["raw_compact like ? or description like ? or relative_path like ?" for _ in likes]
+            )
             params = [param for like in likes for param in (like, like, like)]
             rows = con.execute(
                 f"""
@@ -448,9 +555,13 @@ def search_sketches(
         con.close()
 
 
-def summarize_observed_context(style_hits: list[dict[str, Any]], facts: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_observed_context(
+    style_hits: list[dict[str, Any]], facts: list[dict[str, Any]]
+) -> dict[str, Any]:
     seasons = Counter(_clean(item.get("season")) for item in facts if _clean(item.get("season")))
-    divisions = Counter(_clean(item.get("division")) for item in facts if _clean(item.get("division")))
+    divisions = Counter(
+        _clean(item.get("division")) for item in facts if _clean(item.get("division"))
+    )
     paths = Counter()
     for item in [*style_hits, *facts]:
         relative_path = _clean(item.get("relative_path"))
@@ -464,12 +575,19 @@ def summarize_observed_context(style_hits: list[dict[str, Any]], facts: list[dic
 
 
 def _actions_for_concept(concept: str) -> list[str]:
-    common = ["Use DB hits only as pointers, then open/copy the original source workbook/template before final output."]
+    common = [
+        "Use DB hits only as pointers, then open/copy the original source workbook/template before final output."
+    ]
     concept_actions: dict[str, list[str]] = {
         "color_submit": [
             "Confirm style, season, division, color combo, and current submit stage from WIP/facts/mail.",
             "Choose solid/stripe or print submit path, then copy the real Talbots submit template.",
             "Create submit form and mail dispatch as separate artifacts, then validate template markers.",
+        ],
+        "ceo_recap": [
+            "Open the Development season/division folder and identify the nearby CEO recap workbook.",
+            "Copy the allocation/TP photos format, preserving photo placement and the T&A sheet when present.",
+            "Keep CEO recap output separate from any COSTING-folder recap workbook.",
         ],
         "costing": [
             "Read allocation/recap first, then copy the closest existing MGF costing workbook.",
@@ -493,7 +611,15 @@ def _actions_for_concept(concept: str) -> list[str]:
             "Keep AX/manual-entry actions as assisted drafts unless direct UI automation is explicitly verified.",
         ],
     }
-    return [*concept_actions.get(concept, ["Gather source evidence, identify the workbook/mail/thread to open, then decide the artifact path."]), *common]
+    return [
+        *concept_actions.get(
+            concept,
+            [
+                "Gather source evidence, identify the workbook/mail/thread to open, then decide the artifact path."
+            ],
+        ),
+        *common,
+    ]
 
 
 def _policies_for_concept(concept: str) -> list[str]:
@@ -510,6 +636,13 @@ def _policies_for_concept(concept: str) -> list[str]:
                 "If L/Dip is approved or confirmed, next stage is usually Bulk Submit.",
             ]
         )
+    if concept == "ceo_recap":
+        policies.extend(
+            [
+                "CEO recap, TP photos, and allocation recap belong to the Development workbook family.",
+                "Do not route CEO recap work to the COSTING folder.",
+            ]
+        )
     if concept == "costing":
         policies.extend(
             [
@@ -518,31 +651,47 @@ def _policies_for_concept(concept: str) -> list[str]:
             ]
         )
     if concept == "tp_bom_review":
-        policies.append("For Haven styles, specs may live in construction pages with inch units instead of POM pages.")
+        policies.append(
+            "For Haven styles, specs may live in construction pages with inch units instead of POM pages."
+        )
     return policies
 
 
 def _risk_checks(classification: dict[str, Any], evidence: dict[str, Any]) -> list[str]:
     risks: list[str] = []
     has_any_evidence = any(
-        evidence[key]["hit_count"] > 0 for key in ["style_index", "fact_index", "visual_index", "mail_index"]
+        evidence[key]["hit_count"] > 0
+        for key in ["style_index", "fact_index", "visual_index", "mail_index"]
     )
     if classification["requires_style"] and not classification["styles"]:
         risks.append("Style-dependent work requested but no style number was detected.")
     if not has_any_evidence:
         risks.append("No local evidence found; source data may be missing or not indexed.")
     if evidence["mail_index"].get("db_may_be_stale"):
-        risks.append("Mail DB may be stale for this request; refresh or paste latest mail before final drafting.")
+        risks.append(
+            "Mail DB may be stale for this request; refresh or paste latest mail before final drafting."
+        )
     observed = evidence["observed_context"]
     requested_divisions = set(classification["divisions"])
     observed_divisions = set(observed["divisions"])
-    if requested_divisions and observed_divisions and requested_divisions.isdisjoint(observed_divisions):
+    if (
+        requested_divisions
+        and observed_divisions
+        and requested_divisions.isdisjoint(observed_divisions)
+    ):
         risks.append("Requested division does not match observed division evidence.")
     if len(observed["divisions"]) > 1 and not classification["divisions"]:
-        risks.append("Multiple divisions appear in evidence; division should be confirmed before output.")
+        risks.append(
+            "Multiple divisions appear in evidence; division should be confirmed before output."
+        )
     if len(observed["seasons"]) > 1 and not classification["seasons"]:
-        risks.append("Multiple seasons appear in evidence; season should be confirmed before output.")
-    if classification["primary_concept"] == "tp_bom_review" and evidence["visual_index"]["hit_count"] == 0:
+        risks.append(
+            "Multiple seasons appear in evidence; season should be confirmed before output."
+        )
+    if (
+        classification["primary_concept"] == "tp_bom_review"
+        and evidence["visual_index"]["hit_count"] == 0
+    ):
         risks.append("No sketch/visual index evidence found; image-based comparison may be weak.")
     return risks
 
@@ -563,7 +712,9 @@ def _clarification_hooks(classification: dict[str, Any], evidence: dict[str, Any
 
 def _confidence(classification: dict[str, Any], evidence: dict[str, Any], risks: list[str]) -> str:
     evidence_points = sum(
-        1 for key in ["style_index", "fact_index", "visual_index", "mail_index"] if evidence[key]["hit_count"] > 0
+        1
+        for key in ["style_index", "fact_index", "visual_index", "mail_index"]
+        if evidence[key]["hit_count"] > 0
     )
     if "No local evidence found; source data may be missing or not indexed." in risks:
         return "low"
@@ -589,7 +740,7 @@ def _final_guardrail(confidence: str, risks: list[str], hooks: list[str]) -> str
 def _default_intent(primary_concept: str) -> str:
     if primary_concept in {"mail_followup", "color_submit"}:
         return "draft_message"
-    if primary_concept in {"costing", "order_or_po"}:
+    if primary_concept in {"ceo_recap", "costing", "order_or_po"}:
         return "create_artifact"
     if primary_concept == "tp_bom_review":
         return "review_check"
@@ -600,9 +751,20 @@ def _default_intent(primary_concept: str) -> str:
 
 def _strategy_route(primary_concept: str, primary_intent: str) -> list[str]:
     routes = ["style_index", "fact_index"]
-    if primary_concept in {"mail_followup", "color_submit", "costing", "wip_update", "order_or_po"} or primary_intent == "draft_message":
+    if (
+        primary_concept
+        in {
+            "mail_followup",
+            "color_submit",
+            "ceo_recap",
+            "costing",
+            "wip_update",
+            "order_or_po",
+        }
+        or primary_intent == "draft_message"
+    ):
         routes.append("mail_index")
-    if primary_concept in {"tp_bom_review", "costing"}:
+    if primary_concept in {"tp_bom_review", "ceo_recap", "costing"}:
         routes.append("visual_index")
     return routes
 

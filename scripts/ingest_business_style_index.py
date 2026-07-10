@@ -10,6 +10,7 @@ import re
 import sqlite3
 import sys
 import zipfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -149,7 +150,11 @@ def extract_docx(path: Path) -> list[StyleHit]:
 def extract_pptx(path: Path) -> list[StyleHit]:
     hits: list[StyleHit] = []
     with zipfile.ZipFile(path) as archive:
-        names = sorted(name for name in archive.namelist() if name.startswith("ppt/slides/") and name.endswith(".xml"))
+        names = sorted(
+            name
+            for name in archive.namelist()
+            if name.startswith("ppt/slides/") and name.endswith(".xml")
+        )
         for name in names:
             try:
                 root = ElementTree.fromstring(archive.read(name))
@@ -217,7 +222,7 @@ def extract_hits(path: Path) -> tuple[str, list[StyleHit], str | None]:
 
 def init_db(db_path: Path, with_fts: bool) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -290,6 +295,35 @@ def iter_files(root: Path, include_tops: set[str], path_contains: list[str]) -> 
                 yield path
 
 
+def prune_missing_files(
+    conn: sqlite3.Connection,
+    *,
+    active_tops: set[str],
+    seen_paths: set[str],
+) -> int:
+    if not active_tops:
+        return 0
+    placeholders = ",".join("?" for _ in active_tops)
+    rows = conn.execute(
+        f"SELECT path, relative_path FROM files WHERE top_folder IN ({placeholders})",
+        sorted(active_tops),
+    ).fetchall()
+    stale_rows = [(path, relative_path) for path, relative_path in rows if path not in seen_paths]
+    if not stale_rows:
+        return 0
+    conn.executemany("DELETE FROM style_hits WHERE path = ?", ((path,) for path, _ in stale_rows))
+    has_fts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'style_hits_fts'"
+    ).fetchone()
+    if has_fts:
+        conn.executemany(
+            "DELETE FROM style_hits_fts WHERE relative_path = ?",
+            ((relative_path,) for _, relative_path in stale_rows),
+        )
+    conn.executemany("DELETE FROM files WHERE path = ?", ((path,) for path, _ in stale_rows))
+    return len(stale_rows)
+
+
 def index_file(
     conn: sqlite3.Connection,
     root: Path,
@@ -308,10 +342,16 @@ def index_file(
         return 0, 1, f"stat_error: {exc}"
 
     existing = conn.execute(
-        "SELECT size, mtime_ns FROM files WHERE path = ?",
+        "SELECT size, mtime_ns, parse_status FROM files WHERE path = ?",
         (str(path),),
     ).fetchone()
-    if not force and existing and existing[0] == stat.st_size and existing[1] == stat.st_mtime_ns:
+    if (
+        not force
+        and existing
+        and existing[0] == stat.st_size
+        and existing[1] == stat.st_mtime_ns
+        and existing[2] != "error"
+    ):
         return 0, 0, "unchanged"
 
     status, hits, error = extract_hits(path)
@@ -392,23 +432,28 @@ def build_index(args: argparse.Namespace) -> int:
     init_db(args.db, args.with_fts)
 
     started_at = utc_now()
-    run_id = "business-style-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = "business-style-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     stats = {
         "root": str(root),
         "include_tops": sorted(include_tops),
+        "path_contains": args.path_contains or [],
+        "max_files": None,
         "files_seen": 0,
         "files_indexed": 0,
         "files_error": 0,
         "unchanged": 0,
+        "files_pruned": 0,
         "by_status": {},
     }
 
-    with sqlite3.connect(args.db) as conn:
+    with closing(sqlite3.connect(args.db)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
         )
+        seen_paths: set[str] = set()
         for path in iter_files(root, include_tops, args.path_contains or []):
+            seen_paths.add(str(path))
             stats["files_seen"] += 1
             indexed, errored, status = index_file(
                 conn,
@@ -426,7 +471,21 @@ def build_index(args: argparse.Namespace) -> int:
             stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
             if stats["files_seen"] % args.progress_every == 0:
                 conn.commit()
-                print(json.dumps({k: stats[k] for k in ("files_seen", "files_indexed", "files_error", "unchanged")}, ensure_ascii=False), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            k: stats[k]
+                            for k in ("files_seen", "files_indexed", "files_error", "unchanged")
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+        if not (args.path_contains or []):
+            active_tops = {top for top in include_tops if (root / top).is_dir()}
+            stats["files_pruned"] = prune_missing_files(
+                conn, active_tops=active_tops, seen_paths=seen_paths
+            )
         completed_at = utc_now()
         conn.execute(
             "UPDATE ingest_runs SET completed_at = ?, stats_json = ? WHERE run_id = ?",
@@ -437,7 +496,13 @@ def build_index(args: argparse.Namespace) -> int:
         total_hits = conn.execute("SELECT COUNT(*) FROM style_hits").fetchone()[0]
         total_styles = conn.execute("SELECT COUNT(DISTINCT style_no) FROM style_hits").fetchone()[0]
 
-    print(json.dumps({"run_id": run_id, "total_hits": total_hits, "total_styles": total_styles, **stats}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {"run_id": run_id, "total_hits": total_hits, "total_styles": total_styles, **stats},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -445,7 +510,7 @@ def search_index(args: argparse.Namespace) -> int:
     init_db(args.db, with_fts=False)
     query = args.query.strip()
     like = f"%{query}%"
-    with sqlite3.connect(args.db) as conn:
+    with closing(sqlite3.connect(args.db)) as conn, conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -466,14 +531,12 @@ def search_index(args: argparse.Namespace) -> int:
 
 def index_stats(args: argparse.Namespace) -> int:
     init_db(args.db, with_fts=False)
-    with sqlite3.connect(args.db) as conn:
+    with closing(sqlite3.connect(args.db)) as conn, conn:
         stats = {
             "db": str(args.db),
             "files": conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],
             "style_hits": conn.execute("SELECT COUNT(*) FROM style_hits").fetchone()[0],
-            "styles": conn.execute(
-                "SELECT COUNT(DISTINCT style_no) FROM style_hits"
-            ).fetchone()[0],
+            "styles": conn.execute("SELECT COUNT(DISTINCT style_no) FROM style_hits").fetchone()[0],
             "latest_indexed_at": conn.execute("SELECT MAX(indexed_at) FROM files").fetchone()[0],
         }
         by_status = conn.execute(

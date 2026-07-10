@@ -76,6 +76,20 @@ function Upsert-EnvLine {
     return ,$Updated
 }
 
+function Select-DataPath {
+    param(
+        [string]$Preferred,
+        [string]$Fallback
+    )
+
+    $PreferredPath = Join-Path $ProjectRoot $Preferred
+    if ((Test-Path -LiteralPath $PreferredPath) -and ((Get-Item -LiteralPath $PreferredPath).Length -gt 0)) {
+        return $Preferred
+    }
+
+    return $Fallback
+}
+
 Write-Host "OpenCrab Talbots team bootstrap"
 Write-Host "Project root: $ProjectRoot"
 
@@ -104,12 +118,16 @@ if ($DetectedSourceRoot) {
     Write-Warning "Could not auto-detect a OneDrive folder containing Talbots. Re-run with -SourceRoot ""C:\path\to\OneDrive - company"" or edit .env manually."
 }
 
+$ThinDbPath = Select-DataPath "data\onedrive_thin_index.sqlite" "data\opencrab_thin_index.sqlite"
+$StyleDbPath = Select-DataPath "data\onedrive_business_style_index.sqlite" "data\business_style_index.sqlite"
+
 $Lines = Upsert-EnvLine $Lines "OPENCRAB_WORKSPACE" $ProjectRoot
-$Lines = Upsert-EnvLine $Lines "OPENCRAB_DB_PATH" "data\opencrab_thin_index.sqlite"
+$Lines = Upsert-EnvLine $Lines "OPENCRAB_DB_PATH" $ThinDbPath
 $Lines = Upsert-EnvLine $Lines "OPENCRAB_MAIL_DB_PATH" "data\mail_thin_ontology.sqlite"
-$Lines = Upsert-EnvLine $Lines "OPENCRAB_STYLE_DB_PATH" "data\business_style_index.sqlite"
+$Lines = Upsert-EnvLine $Lines "OPENCRAB_STYLE_DB_PATH" $StyleDbPath
 $Lines = Upsert-EnvLine $Lines "OPENCRAB_VISUAL_DB_PATH" "data\visual_sketch_index.sqlite"
 $Lines = Upsert-EnvLine $Lines "OPENCRAB_MAX_MAIL_AGE_HOURS" "72"
+$Lines = Upsert-EnvLine $Lines "OPENCRAB_MAX_INDEX_AGE_HOURS" "168"
 $Lines = Upsert-EnvLine $Lines "OPENCRAB_LAYOUT_SPEC_DIR" "knowledge\workbook_layout_specs"
 
 Set-Content -LiteralPath $EnvPath -Value $Lines -Encoding UTF8
@@ -134,4 +152,5 @@ if ($SyncOutlook) {
 Write-Host ""
 Write-Host "Bootstrap complete."
 Write-Host "Open this folder in Codex and say: 작업 시작하자"
+Write-Host "Use .\.venv\Scripts\python.exe for OpenCrab commands unless the venv is activated."
 Write-Host "If mail or indexes are not fresh yet, run with -RefreshIndexes and/or -SyncOutlook."

@@ -1,7 +1,17 @@
 {
+  "sheet_count": {
+    "min": 1
+  },
   "sheets": [
     {
-      "name": "264952221 FRESH STRIPE",
+      "match": {
+        "anchors": {
+          "A1": "PRINT SUBMIT FORM"
+        }
+      },
+      "match_count": {
+        "min": 1
+      },
       "required_values": {
         "A1": "PRINT SUBMIT FORM",
         "G1": "STRIKE OFF SUBMIT            SAMPLE YARDAGE              BULK SUBMIT",
@@ -31,7 +41,16 @@
         "G9:H9",
         "G10:H10",
         "G11:I11"
-      ]
+      ],
+      "print_area": {
+        "contains": "A1:I38"
+      },
+      "image_count": {
+        "min": 1
+      },
+      "shape_count": {
+        "min": 9
+      }
     }
   ]
 }

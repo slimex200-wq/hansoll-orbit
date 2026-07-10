@@ -33,6 +33,8 @@ These layers are intentionally small. They point back to source files instead of
 
 Configure `.env` first. The CLI reads `.env` automatically, and OS environment variables override it when both are set.
 
+The examples below use `python` for readability and assume the project `.venv` is activated. On Windows without activation, use `.\.venv\Scripts\python.exe` so index refreshes cannot silently skip declared parsers such as `pypdf`.
+
 Build or refresh the generic file index:
 
 ```powershell
@@ -57,13 +59,15 @@ For mail-dependent work, require fresh mail as a separate gate:
 python -m opencrab_starter.cli preflight --require-indexes --require-fresh-mail
 ```
 
-Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. The latest received mail date remains available as evidence. Refresh mail ingest before drafting if this check fails.
+Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. File, style, and visual index freshness use `OPENCRAB_MAX_INDEX_AGE_HOURS` (168 hours by default). The latest timestamps remain available as evidence. Refresh the affected ingest before proceeding if these checks fail.
 
 Run audit when deciding whether the workspace is production-ready:
 
 ```powershell
 python -m opencrab_starter.cli audit
 ```
+
+Production audit always requires the core file and style indexes, checks index age, and reports style parser health. It no longer treats missing or old business indexes as production-ready warnings.
 
 Use the stricter audit before mail-dependent work:
 

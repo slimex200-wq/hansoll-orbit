@@ -1,7 +1,14 @@
 {
+  "sheet_count": 1,
   "sheets": [
     {
-      "name": "263900045 BULK",
+      "match": {
+        "anchors": {
+          "B2": "Buying Agent/Agent Office",
+          "B3": "Season/Division"
+        }
+      },
+      "match_count": 1,
       "required_values": {
         "B2": "Buying Agent/Agent Office",
         "B3": "Season/Division",
