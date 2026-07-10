@@ -152,6 +152,7 @@ python -m opencrab_starter.cli preflight --require-indexes --require-fresh-mail
 ```
 
 Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. File, style, and visual index freshness use `OPENCRAB_MAX_INDEX_AGE_HOURS`. The latest received and indexed timestamps remain available as evidence.
+Freshness is advanced only by a successful unlimited ingest run; interrupted or filtered runs cannot make stale evidence look current.
 
 For a production-readiness summary with next actions:
 
@@ -222,6 +223,7 @@ python .\scripts\visual_sketch_index.py search `
 ```
 
 The index is intentionally thin: style number, source path, image location, nearby text, a small vector, and an optional thumbnail. It does not copy raw tech packs or WIP files into the repository.
+The documented `--path-contains sketch` filter is the complete production scope for this index; refreshes prune removed files only inside that scope and preserve unrelated visual records.
 
 Read project rules (the default prints their contents so a fresh session actually receives them):
 

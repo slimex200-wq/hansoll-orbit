@@ -96,14 +96,17 @@ def audit_production_readiness(
         ("source_root", "set OPENCRAB_SOURCE_ROOT to the business source folder"),
         ("thin_file_index", "run python -m opencrab_starter.cli build-index"),
         ("style_index", "run python -m opencrab_starter.cli style-refresh --include-top Talbots"),
-        ("style_parse_health", "install missing parser dependencies, then rebuild the style index"),
+        ("style_parse_health", "repair unreadable source files, then rebuild the style index"),
         ("mail_index", "run python -m opencrab_starter.cli mail-refresh"),
         ("visual_sketch_index", "run scripts/visual_sketch_index.py build for sketch folders"),
         ("layout_specs", "add JSON specs under OPENCRAB_LAYOUT_SPEC_DIR"),
         ("project_rules", "add reviewed project rules under knowledge/"),
     ]:
         if name in checks:
-            items.append(item_from_preflight(checks[name], next_action=action))
+            check = checks[name]
+            if name == "style_parse_health" and check.evidence.get("dependency_error_count", 0):
+                action = "install missing parser dependencies, then rebuild the style index"
+            items.append(item_from_preflight(check, next_action=action))
 
     if "mail_freshness" in checks:
         items.append(

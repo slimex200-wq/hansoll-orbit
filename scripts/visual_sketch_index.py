@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from xml.etree import ElementTree
 
 from openpyxl import load_workbook
@@ -466,13 +466,19 @@ def init_db(db_path: Path) -> None:
         )
 
 
-def iter_files(root: Path, include_tops: set[str], path_contains: list[str]) -> Iterable[Path]:
+def iter_files(
+    root: Path,
+    include_tops: set[str],
+    path_contains: list[str],
+    *,
+    on_error: Callable[[OSError], None] | None = None,
+) -> Iterable[Path]:
     starts = [root / top for top in sorted(include_tops)] if include_tops else [root]
     lowered_terms = [term.lower() for term in path_contains if term]
     for start in starts:
         if not start.exists():
             continue
-        for dirpath, dirnames, filenames in os.walk(start):
+        for dirpath, dirnames, filenames in os.walk(start, onerror=on_error):
             dirnames[:] = [name for name in dirnames if not name.startswith(".")]
             for filename in filenames:
                 if filename.startswith("~$"):
@@ -489,7 +495,9 @@ def iter_files(root: Path, include_tops: set[str], path_contains: list[str]) -> 
 def prune_missing_files(
     conn: sqlite3.Connection,
     *,
+    source_root: Path,
     active_tops: set[str] | None,
+    path_contains: list[str],
     seen_paths: set[str],
 ) -> int:
     if active_tops is not None:
@@ -502,7 +510,21 @@ def prune_missing_files(
         ).fetchall()
     else:
         rows = conn.execute("SELECT path FROM files").fetchall()
-    stale_paths = [path for (path,) in rows if path not in seen_paths]
+    root_key = os.path.normcase(str(source_root.resolve()))
+    seen_keys = {os.path.normcase(str(Path(path).resolve())) for path in seen_paths}
+    lowered_terms = [term.strip().casefold() for term in path_contains if term.strip()]
+    stale_paths: list[str] = []
+    for (path,) in rows:
+        path_key = os.path.normcase(str(Path(path).resolve()))
+        try:
+            if os.path.commonpath((root_key, path_key)) != root_key:
+                continue
+        except ValueError:
+            continue
+        if lowered_terms and not any(term in path_key.casefold() for term in lowered_terms):
+            continue
+        if path_key not in seen_keys:
+            stale_paths.append(path)
     if not stale_paths:
         return 0
     conn.executemany("DELETE FROM sketches WHERE path = ?", ((path,) for path in stale_paths))
@@ -623,6 +645,10 @@ def build_index(args: argparse.Namespace) -> int:
     root = args.root.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"source root is missing or not a directory: {root}")
+    include_tops = set(args.include_top or [])
+    missing_tops = sorted(top for top in include_tops if not (root / top).is_dir())
+    if missing_tops:
+        raise FileNotFoundError(f"requested visual scope is missing: {', '.join(missing_tops)}")
     db_path = args.db.expanduser()
     if args.reset and db_path.exists():
         db_path.unlink()
@@ -642,16 +668,22 @@ def build_index(args: argparse.Namespace) -> int:
         "unchanged": 0,
         "files_pruned": 0,
         "images_indexed": 0,
+        "scan_errors": 0,
         "by_status": {},
     }
-    include_tops = set(args.include_top or [])
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
         )
         seen_paths: set[str] = set()
-        for path in iter_files(root, include_tops, args.path_contains or []):
+        scan_errors: list[OSError] = []
+        for path in iter_files(
+            root,
+            include_tops,
+            args.path_contains or [],
+            on_error=scan_errors.append,
+        ):
             seen_paths.add(str(path))
             stats["files_seen"] += 1
             indexed, errored, status, image_count = index_file(
@@ -674,13 +706,18 @@ def build_index(args: argparse.Namespace) -> int:
             if stats["files_seen"] % args.progress_every == 0:
                 conn.commit()
                 print(json.dumps(stats, ensure_ascii=False), flush=True)
-        if not (args.path_contains or []) and not args.max_files:
+        stats["scan_errors"] = len(scan_errors)
+        if scan_errors:
+            raise OSError(f"visual source scan was incomplete: {scan_errors[0]}")
+        if not args.max_files and stats["files_seen"] > 0:
             active_tops = (
                 {top for top in include_tops if (root / top).is_dir()} if include_tops else None
             )
             stats["files_pruned"] = prune_missing_files(
                 conn,
+                source_root=root,
                 active_tops=active_tops,
+                path_contains=args.path_contains or [],
                 seen_paths=seen_paths,
             )
         completed_at = utc_now()

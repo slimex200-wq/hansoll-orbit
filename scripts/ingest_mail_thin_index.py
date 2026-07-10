@@ -18,9 +18,12 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Iterable
 
+from opencrab_starter.preflight import sqlite_latest_full_ingest
+
 
 STYLE_PATTERN = re.compile(r"\b\d{6,9}(?:-\d{2,4})?\b")
 TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9'-]{2,}")
+OUTLOOK_ENTRY_ID_PATTERN = re.compile(r"\bEntryID:\s*([0-9A-F]+)", re.IGNORECASE)
 SUPPORTED_EXTENSIONS = {".eml", ".txt", ".html", ".htm"}
 MAX_BODY_CHARS = 12_000
 MAX_PREVIEW_CHARS = 1_500
@@ -169,9 +172,30 @@ def text_from_file(path: Path) -> tuple[str, str, str, str, str]:
     return received, sender, "", subject or normalize_text(path.stem), normalize_text(raw)
 
 
-def mail_id_for(path: Path, body: str) -> str:
-    stat = path.stat()
-    material = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{body[:500]}"
+def canonical_source_path(path: Path) -> str:
+    return os.path.normcase(str(path.expanduser().resolve()))
+
+
+def mail_id_for(
+    body: str,
+    *,
+    received: str,
+    sender: str,
+    subject: str,
+) -> str:
+    entry_id = OUTLOOK_ENTRY_ID_PATTERN.search(body)
+    if entry_id:
+        material = f"outlook-entry:{entry_id.group(1).upper()}"
+        return hashlib.sha256(material.encode("ascii")).hexdigest()[:24]
+    body_hash = hashlib.sha256(body.encode("utf-8", "ignore")).hexdigest()
+    material = "|".join(
+        (
+            received,
+            normalize_text(sender).casefold(),
+            normalize_text(subject).casefold(),
+            body_hash,
+        )
+    )
     return hashlib.sha256(material.encode("utf-8", "ignore")).hexdigest()[:24]
 
 
@@ -183,7 +207,12 @@ def parse_mail(path: Path, indexed_at: str) -> MailRecord:
     combined = f"{subject} {body}"
     preview = normalize_text(body)[:MAX_PREVIEW_CHARS]
     return MailRecord(
-        mail_id=mail_id_for(path, body),
+        mail_id=mail_id_for(
+            body,
+            received=received,
+            sender=sender,
+            subject=subject,
+        ),
         received=received,
         sender=sender,
         recipients=recipients,
@@ -192,7 +221,7 @@ def parse_mail(path: Path, indexed_at: str) -> MailRecord:
         body_preview=preview,
         style_numbers=" ".join(extract_styles(combined)),
         action_terms=" ".join(extract_action_terms(combined)),
-        source_path=str(path),
+        source_path=canonical_source_path(path),
         indexed_at=indexed_at,
     )
 
@@ -232,8 +261,129 @@ def init_db(db_path: Path) -> None:
         )
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')",
+            (table,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _mail_ids_for_source(conn: sqlite3.Connection, source_path: str) -> list[str]:
+    columns = _table_columns(conn, "mails")
+    source_columns = [column for column in ("source_id", "source_path") if column in columns]
+    if not source_columns:
+        return []
+    if os.name == "nt":
+        where = " OR ".join(
+            f"REPLACE({column}, '/', ?) = ? COLLATE NOCASE" for column in source_columns
+        )
+        params = [value for _ in source_columns for value in (os.sep, source_path)]
+    else:
+        where = " OR ".join(f"{column} = ?" for column in source_columns)
+        params = [source_path] * len(source_columns)
+    rows = conn.execute(
+        f"SELECT mail_id FROM mails WHERE {where}",
+        params,
+    )
+    return [str(row[0]) for row in rows]
+
+
+def _mail_ids_for_message(conn: sqlite3.Connection, record: MailRecord) -> list[str]:
+    columns = _table_columns(conn, "mails")
+    if not {"mail_id", "received", "sender", "subject"}.issubset(columns):
+        return []
+    if not record.received or not record.subject:
+        return []
+    content_checks: list[str] = []
+    content_params: list[object] = []
+    if "body_hash" in columns:
+        content_checks.append("body_hash = ?")
+        content_params.append(
+            hashlib.sha256(record.body_preview.encode("utf-8", "ignore")).hexdigest()
+        )
+    if "body_preview" in columns:
+        content_checks.append("body_preview = ?")
+        content_params.append(record.body_preview)
+    if not content_checks:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT mail_id
+        FROM mails
+        WHERE received = ? AND sender = ? AND subject = ?
+          AND ({" OR ".join(content_checks)})
+        """,
+        (record.received, record.sender, record.subject, *content_params),
+    )
+    return [str(row[0]) for row in rows]
+
+
+def _delete_mail_dependencies(conn: sqlite3.Connection, mail_ids: list[str]) -> None:
+    if not mail_ids:
+        return
+    placeholders = ", ".join("?" for _ in mail_ids)
+    for table in ("mail_style_refs", "mail_fts"):
+        if _table_exists(conn, table) and "mail_id" in _table_columns(conn, table):
+            conn.execute(f"DELETE FROM {table} WHERE mail_id IN ({placeholders})", mail_ids)
+
+
+def _insert_mail_style_refs(conn: sqlite3.Connection, record: MailRecord) -> None:
+    if not _table_exists(conn, "mail_style_refs"):
+        return
+    columns = _table_columns(conn, "mail_style_refs")
+    if not {"style_no", "mail_id"}.issubset(columns):
+        return
+    for style_no in record.style_numbers.split():
+        values: dict[str, object] = {
+            "style_no": style_no,
+            "mail_id": record.mail_id,
+            "received": record.received,
+            "subject": record.subject,
+        }
+        insert_columns = [column for column in values if column in columns]
+        placeholders = ", ".join("?" for _ in insert_columns)
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO mail_style_refs ({", ".join(insert_columns)})
+            VALUES ({placeholders})
+            """,
+            [values[column] for column in insert_columns],
+        )
+
+
+def _insert_mail_fts(conn: sqlite3.Connection, record: MailRecord) -> None:
+    if not _table_exists(conn, "mail_fts"):
+        return
+    columns = _table_columns(conn, "mail_fts")
+    if not {"mail_id", "searchable"}.issubset(columns):
+        return
+    searchable = normalize_text(
+        " ".join(
+            (
+                record.subject,
+                record.sender,
+                record.recipients,
+                record.style_numbers,
+                record.action_terms,
+                record.body_preview,
+            )
+        )
+    )
+    conn.execute(
+        "INSERT INTO mail_fts (mail_id, searchable) VALUES (?, ?)",
+        (record.mail_id, searchable),
+    )
+
+
 def insert_mail_record(conn: sqlite3.Connection, record: MailRecord) -> None:
-    columns = [row[1] for row in conn.execute("PRAGMA table_info(mails)")]
+    columns = _table_columns(conn, "mails")
     source_path = Path(record.source_path)
     body_hash = hashlib.sha256(record.body_preview.encode("utf-8", "ignore")).hexdigest()
     values: dict[str, object] = {
@@ -260,6 +410,20 @@ def insert_mail_record(conn: sqlite3.Connection, record: MailRecord) -> None:
     }
     insert_columns = [column for column in columns if column in values]
     placeholders = ", ".join("?" for _ in insert_columns)
+    prior_mail_ids = sorted(
+        {
+            *_mail_ids_for_source(conn, record.source_path),
+            *_mail_ids_for_message(conn, record),
+            record.mail_id,
+        }
+    )
+    _delete_mail_dependencies(conn, prior_mail_ids)
+    if prior_mail_ids:
+        prior_placeholders = ", ".join("?" for _ in prior_mail_ids)
+        conn.execute(
+            f"DELETE FROM mails WHERE mail_id IN ({prior_placeholders})",
+            prior_mail_ids,
+        )
     conn.execute(
         f"""
         INSERT OR REPLACE INTO mails ({", ".join(insert_columns)})
@@ -267,6 +431,8 @@ def insert_mail_record(conn: sqlite3.Connection, record: MailRecord) -> None:
         """,
         [values[column] for column in insert_columns],
     )
+    _insert_mail_style_refs(conn, record)
+    _insert_mail_fts(conn, record)
 
 
 def iter_mail_files(root: Path, path_contains: list[str]) -> Iterable[Path]:
@@ -343,6 +509,16 @@ def build_index(args: argparse.Namespace) -> int:
 def status(args: argparse.Namespace) -> int:
     init_db(args.db)
     with closing(sqlite3.connect(args.db)) as conn, conn:
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        incomplete_runs = (
+            conn.execute("SELECT COUNT(*) FROM ingest_runs WHERE completed_at IS NULL").fetchone()[
+                0
+            ]
+            if "ingest_runs" in tables
+            else 0
+        )
         stats = {
             "db": str(args.db),
             "mail_count": conn.execute("SELECT COUNT(*) FROM mails").fetchone()[0],
@@ -351,7 +527,14 @@ def status(args: argparse.Namespace) -> int:
             "style_count": conn.execute(
                 "SELECT COUNT(DISTINCT style_numbers) FROM mails WHERE style_numbers <> ''"
             ).fetchone()[0],
+            "incomplete_runs": incomplete_runs,
         }
+    has_ingest_runs, latest_full_ingest = sqlite_latest_full_ingest(args.db)
+    stats["latest_full_ingest_at"] = latest_full_ingest
+    stats["freshness_at"] = latest_full_ingest if has_ingest_runs else stats["latest_indexed_at"]
+    stats["freshness_source"] = (
+        "ingest_runs.completed_at" if has_ingest_runs else "mails.indexed_at"
+    )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
 

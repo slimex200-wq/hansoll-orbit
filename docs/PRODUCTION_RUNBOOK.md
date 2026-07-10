@@ -60,6 +60,7 @@ python -m opencrab_starter.cli preflight --require-indexes --require-fresh-mail
 ```
 
 Mail freshness uses `OPENCRAB_MAX_MAIL_AGE_HOURS` against the mail index refresh time. File, style, and visual index freshness use `OPENCRAB_MAX_INDEX_AGE_HOURS` (168 hours by default). The latest timestamps remain available as evidence. Refresh the affected ingest before proceeding if these checks fail.
+Only successful unlimited ingest runs advance freshness. Interrupted, empty, wrong-root, or noncanonical filtered runs remain visible as history but do not make the audit pass.
 
 Run audit when deciding whether the workspace is production-ready:
 
@@ -109,6 +110,8 @@ python .\scripts\visual_sketch_index.py build `
   --db .\data\visual_sketch_index.sqlite `
   --thumb-dir .\data\visual_sketch_thumbs
 ```
+
+`--path-contains sketch` is the canonical complete visual-index scope. A successful unlimited run in that scope satisfies visual freshness and prunes only removed sketch paths under the requested source/top folder.
 
 Refresh exported mail context before drafting:
 

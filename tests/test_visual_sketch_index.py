@@ -136,6 +136,95 @@ class VisualSketchIndexTests(unittest.TestCase):
         self.assertEqual(file_paths, {str(kept)})
         self.assertEqual(sketch_paths, {str(kept)})
 
+    def test_sketch_scope_prunes_only_matching_root_and_top_folder(self) -> None:
+        temp_root = Path.cwd() / ".test_tmp"
+        temp_root.mkdir(exist_ok=True)
+        root = temp_root / f"visual_{uuid.uuid4().hex}"
+        source_root = root / "source"
+        external_root = root / "external"
+        try:
+            talbots = source_root / "Talbots"
+            other = source_root / "Other"
+            external_talbots = external_root / "Talbots"
+            talbots.mkdir(parents=True)
+            other.mkdir(parents=True)
+            external_talbots.mkdir(parents=True)
+            kept = talbots / "271730054 sketch kept.png"
+            removed = talbots / "271730055 sketch removed.png"
+            non_sketch = talbots / "271730056 reference.png"
+            other_top = other / "271730057 sketch other.png"
+            external = external_talbots / "271730058 sketch external.png"
+            for path in (kept, removed, non_sketch, other_top, external):
+                path.write_bytes(sample_sketch_bytes())
+            db = root / "visual.sqlite"
+
+            def build(scan_root: Path, tops: list[str], terms: list[str] | None) -> None:
+                args = Namespace(
+                    root=scan_root,
+                    db=db,
+                    reset=False,
+                    thumb_dir=None,
+                    include_top=tops,
+                    path_contains=terms,
+                    force=False,
+                    max_files=None,
+                    max_pdf_pages=1,
+                    progress_every=100,
+                )
+                with redirect_stdout(StringIO()):
+                    build_index(args)
+
+            build(source_root, ["Talbots", "Other"], None)
+            build(external_root, ["Talbots"], None)
+            removed.unlink()
+            build(source_root, ["Talbots"], ["sketch"])
+            with closing(sqlite3.connect(db)) as conn:
+                file_paths = {row[0] for row in conn.execute("SELECT path FROM files")}
+                sketch_paths = {row[0] for row in conn.execute("SELECT path FROM sketches")}
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        expected = {str(kept), str(non_sketch), str(other_top), str(external)}
+        self.assertEqual(file_paths, expected)
+        self.assertEqual(sketch_paths, expected)
+
+    def test_empty_scoped_scan_does_not_prune_existing_visual_rows(self) -> None:
+        temp_root = Path.cwd() / ".test_tmp"
+        temp_root.mkdir(exist_ok=True)
+        root = temp_root / f"visual_{uuid.uuid4().hex}"
+        source_root = root / "source"
+        talbots = source_root / "Talbots"
+        talbots.mkdir(parents=True)
+        try:
+            path = talbots / "271730054 sketch.png"
+            path.write_bytes(sample_sketch_bytes())
+            db = root / "visual.sqlite"
+            args = Namespace(
+                root=source_root,
+                db=db,
+                reset=False,
+                thumb_dir=None,
+                include_top=["Talbots"],
+                path_contains=["sketch"],
+                force=False,
+                max_files=None,
+                max_pdf_pages=1,
+                progress_every=100,
+            )
+            with redirect_stdout(StringIO()):
+                build_index(args)
+            path.rename(talbots / "271730054 reference.png")
+            with redirect_stdout(StringIO()):
+                build_index(args)
+            with closing(sqlite3.connect(db)) as conn:
+                file_paths = {row[0] for row in conn.execute("SELECT path FROM files")}
+                sketch_paths = {row[0] for row in conn.execute("SELECT path FROM sketches")}
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(file_paths, {str(path)})
+        self.assertEqual(sketch_paths, {str(path)})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -146,6 +146,26 @@ class ProductionAuditTests(unittest.TestCase):
         item = next(item for item in audit["items"] if item["name"] == "style_parse_health")
         self.assertEqual(item["status"], "fail")
         self.assertEqual(item["evidence"]["dependency_error_count"], 1)
+        self.assertIn("install missing parser dependencies", item["next_action"])
+
+    def test_audit_recommends_source_repair_for_file_specific_parse_error(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"audit_{uuid.uuid4().hex}"
+        try:
+            config = self.make_config(root)
+            with closing(sqlite3.connect(config.style_db_path)) as conn:
+                conn.execute(
+                    "UPDATE files SET parse_status = 'error', error = ?",
+                    ("PermissionError: source workbook is locked",),
+                )
+                conn.commit()
+            audit = audit_production_readiness(config)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        item = next(item for item in audit["items"] if item["name"] == "style_parse_health")
+        self.assertEqual(item["status"], "warn")
+        self.assertEqual(item["evidence"]["dependency_error_count"], 0)
+        self.assertIn("repair unreadable source files", item["next_action"])
 
     def test_separate_data_workspace_is_informational(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"audit_{uuid.uuid4().hex}"

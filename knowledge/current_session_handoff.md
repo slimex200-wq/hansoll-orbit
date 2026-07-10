@@ -51,20 +51,21 @@ If a very recent mail is needed and not indexed, ask the user for the pasted mai
 
 Last verified audit status from `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`:
 
-- thin file index: 8,277 rows
-- business style index: 118,866 rows
-- mail index: 12,710 rows
-- visual sketch index: 1,263 rows
+- thin file index: 9,283 rows
+- business style index: 119,621 rows
+- mail index: 12,293 unique source rows
+- visual sketch index: 1,273 rows
 - layout specs: 3
 - project rules: 4
-- production audit: blocked as of 2026-07-10 because file/style/visual indexes are stale, 99 historical style parse failures were caused by a missing `pypdf`, and mail freshness exceeds 72 hours
+- production audit: PASS as of 2026-07-10 (`ok=true`, `ready_for_mail_dependent_work=true`, 0 failures, 1 warning)
+- remaining warning: 23 source-specific parse errors (16 damaged/nonstandard PDFs, 4 locked workbooks, 2 bad ZIP workbooks, 1 invalid-XML workbook); dependency errors are 0
 
 Last verified index timestamps as of 2026-07-10 KST:
 
-- file index latest indexed: 2026-05-22 11:16 KST
-- style index latest indexed: 2026-05-22 11:20 KST
-- mail latest received/indexed: 2026-06-22 11:53 KST
-- visual sketch latest indexed: 2026-05-22 11:20 KST
+- thin full ingest completed: 2026-07-10 11:30 KST
+- style full ingest completed: 2026-07-10 11:36 KST
+- mail full ingest completed: 2026-07-10 11:41 KST
+- visual canonical `Talbots + sketch` ingest completed: 2026-07-10 11:56 KST
 
 ## Operating Style
 

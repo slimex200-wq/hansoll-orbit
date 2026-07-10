@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import unittest
 import uuid
-import json
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from opencrab_starter.config import OpenCrabConfig
 from opencrab_starter.preflight import (
+    check_mail_freshness,
     check_sqlite_index,
     check_style_parse_health,
     run_preflight,
@@ -275,6 +276,38 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertGreater(check.evidence["age_hours"], 168)
 
+    def test_mail_freshness_ignores_incomplete_run_and_recent_partial_rows(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"
+        try:
+            root.mkdir(parents=True)
+            db_path = root / "mail.sqlite"
+            old = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+            recent = datetime.now(UTC).isoformat()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute("CREATE TABLE mails(received TEXT, indexed_at TEXT)")
+                conn.execute("INSERT INTO mails VALUES (?, ?)", (old, recent))
+                conn.execute(
+                    "CREATE TABLE ingest_runs(run_id TEXT, started_at TEXT, completed_at TEXT, stats_json TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('complete', ?, ?, ?)",
+                    (old, old, json.dumps({"files_seen": 10, "path_contains": []})),
+                )
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('interrupted', ?, NULL, ?)",
+                    (recent, json.dumps({"files_seen": 1, "path_contains": []})),
+                )
+                conn.commit()
+
+            check = check_mail_freshness(db_path, max_age_hours=24, required=True)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.evidence["freshness_source"], "ingest_runs.completed_at")
+        self.assertEqual(check.evidence["latest_full_ingest_at"], old)
+        self.assertEqual(check.evidence["latest_indexed_at"], recent)
+
     def test_freshness_uses_only_completed_full_scope_ingest(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"
         try:
@@ -320,6 +353,117 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(scoped_check.status, "fail")
         self.assertEqual(full_check.status, "pass")
         self.assertEqual(full_check.evidence["freshness_source"], "ingest_runs.completed_at")
+
+    def test_visual_freshness_accepts_only_documented_sketch_scope(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"
+        try:
+            root.mkdir(parents=True)
+            db_path = root / "visual.sqlite"
+            source_root = root / "source"
+            source_root.mkdir()
+            now = datetime.now(UTC).isoformat()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute("CREATE TABLE sketches(sketch_id TEXT, indexed_at TEXT)")
+                conn.execute("INSERT INTO sketches VALUES ('s1', ?)", (now,))
+                conn.execute(
+                    "CREATE TABLE ingest_runs(run_id TEXT, started_at TEXT, completed_at TEXT, stats_json TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('canonical', ?, ?, ?)",
+                    (
+                        now,
+                        now,
+                        json.dumps(
+                            {
+                                "path_contains": [" SKETCH ", "sketch"],
+                                "include_tops": ["Talbots"],
+                                "root": str(source_root),
+                                "max_files": None,
+                                "files_seen": 10,
+                                "scan_errors": 0,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+
+            def visual_check():
+                return check_sqlite_index(
+                    "visual_sketch_index",
+                    db_path,
+                    "sketches",
+                    required=True,
+                    max_age_hours=24,
+                    accepted_path_contains=((), ("sketch",)),
+                    required_include_tops=("Talbots",),
+                    required_root=source_root,
+                )
+
+            canonical = visual_check()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute("DELETE FROM ingest_runs")
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('wrong-filter', ?, ?, ?)",
+                    (
+                        now,
+                        now,
+                        json.dumps(
+                            {
+                                "path_contains": ["TP"],
+                                "include_tops": ["Talbots"],
+                                "root": str(source_root),
+                                "files_seen": 10,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            wrong_filter = visual_check()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute("DELETE FROM ingest_runs")
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('wrong-top', ?, ?, ?)",
+                    (
+                        now,
+                        now,
+                        json.dumps(
+                            {
+                                "path_contains": ["sketch"],
+                                "include_tops": ["Other"],
+                                "root": str(source_root),
+                                "files_seen": 10,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            wrong_top = visual_check()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute("DELETE FROM ingest_runs")
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('wrong-root', ?, ?, ?)",
+                    (
+                        now,
+                        now,
+                        json.dumps(
+                            {
+                                "path_contains": ["sketch"],
+                                "include_tops": ["Talbots"],
+                                "root": str(root / "unrelated"),
+                                "files_seen": 10,
+                            }
+                        ),
+                    ),
+                )
+                conn.commit()
+            wrong_root = visual_check()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(canonical.status, "pass")
+        self.assertEqual(wrong_filter.status, "fail")
+        self.assertEqual(wrong_top.status, "fail")
+        self.assertEqual(wrong_root.status, "fail")
 
     def test_empty_ingest_does_not_refresh_nonempty_index(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"

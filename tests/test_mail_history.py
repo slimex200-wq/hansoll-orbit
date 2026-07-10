@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import shutil
 import unittest
@@ -123,6 +124,51 @@ class MailHistoryTests(unittest.TestCase):
         self.assertEqual(strict_context["latest_indexed_at"], indexed_at)
         self.assertEqual(strict_context["freshness_source"], "indexed_at")
         self.assertEqual(strict_context["max_age_hours"], 24)
+
+    def test_incomplete_mail_run_cannot_mask_stale_completed_ingest(self) -> None:
+        temp_root = Path.cwd() / ".test_tmp"
+        temp_root.mkdir(exist_ok=True)
+        temp_dir = temp_root / f"mail_{uuid.uuid4().hex}"
+        temp_dir.mkdir()
+        old = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+        recent = datetime.now(UTC).isoformat()
+        try:
+            db_path = temp_dir / "mail.sqlite"
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE mails (
+                        mail_id TEXT PRIMARY KEY, received TEXT, sender TEXT, subject TEXT,
+                        body_chars INTEGER, body_preview TEXT, style_numbers TEXT,
+                        action_terms TEXT, indexed_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO mails VALUES ('m1', ?, '', 'CEO recap', 0, '', '', '', ?)",
+                    (old, recent),
+                )
+                conn.execute(
+                    "CREATE TABLE ingest_runs(run_id TEXT, started_at TEXT, completed_at TEXT, stats_json TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('complete', ?, ?, ?)",
+                    (old, old, json.dumps({"files_seen": 10, "path_contains": []})),
+                )
+                conn.execute(
+                    "INSERT INTO ingest_runs VALUES ('interrupted', ?, NULL, ?)",
+                    (recent, json.dumps({"files_seen": 1, "path_contains": []})),
+                )
+                conn.commit()
+
+            context = load_mail_context(db_path, "CEO recap", max_age_hours=24)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        self.assertTrue(context["db_may_be_stale"])
+        self.assertEqual(context["freshness_source"], "ingest_runs.completed_at")
+        self.assertEqual(context["latest_full_ingest_at"], old)
+        self.assertEqual(context["freshness_at"], old)
 
 
 if __name__ == "__main__":

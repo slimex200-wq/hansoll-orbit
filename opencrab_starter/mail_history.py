@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .preflight import sqlite_latest_full_ingest
+
 
 STYLE_PATTERN = re.compile(r"\b\d{6,9}(?:-\d{2,4})?\b")
 TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9'-]{2,}")
@@ -107,12 +109,22 @@ def load_mail_context(
             if "indexed_at" in mail_columns
             else None
         )
-        freshness_value = latest_indexed_at or latest_received
+        has_ingest_runs, latest_full_ingest = sqlite_latest_full_ingest(db_path)
+        freshness_value = (
+            latest_full_ingest if has_ingest_runs else latest_indexed_at or latest_received
+        )
+        freshness_source = (
+            "ingest_runs.completed_at"
+            if has_ingest_runs
+            else "indexed_at"
+            if latest_indexed_at
+            else "received"
+        )
         age_hours = _age_hours(freshness_value)
         db_may_be_stale = _is_db_stale(
             latest_received,
             expected_after,
-            latest_indexed_at=latest_indexed_at,
+            latest_indexed_at=freshness_value,
             max_age_hours=max_age_hours,
         )
 
@@ -146,7 +158,9 @@ def load_mail_context(
             "mail_count": total_mails,
             "latest_received": latest_received,
             "latest_indexed_at": latest_indexed_at,
-            "freshness_source": "indexed_at" if latest_indexed_at else "received",
+            "latest_full_ingest_at": latest_full_ingest,
+            "freshness_at": freshness_value,
+            "freshness_source": freshness_source,
             "max_age_hours": max_age_hours,
             "age_hours": age_hours,
             "db_may_be_stale": db_may_be_stale,
@@ -157,7 +171,7 @@ def load_mail_context(
                 latest_received,
                 expected_after,
                 ranked,
-                latest_indexed_at=latest_indexed_at,
+                latest_indexed_at=freshness_value,
                 max_age_hours=max_age_hours,
             ),
         }

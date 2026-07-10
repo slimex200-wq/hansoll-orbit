@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, dataclass
@@ -76,7 +77,19 @@ def sqlite_max_value(db_path: Path, table: str, column: str) -> str | None:
         return None
 
 
-def sqlite_latest_full_ingest(db_path: Path) -> tuple[bool, str | None]:
+def _normalized_terms(values: object) -> tuple[str, ...]:
+    if not isinstance(values, list):
+        return ()
+    return tuple(sorted({str(value).strip().casefold() for value in values if str(value).strip()}))
+
+
+def sqlite_latest_full_ingest(
+    db_path: Path,
+    *,
+    accepted_path_contains: tuple[tuple[str, ...], ...] = ((),),
+    required_include_tops: tuple[str, ...] = (),
+    required_root: Path | None = None,
+) -> tuple[bool, str | None]:
     if not db_path.exists():
         return False, None
     try:
@@ -87,6 +100,18 @@ def sqlite_latest_full_ingest(db_path: Path) -> tuple[bool, str | None]:
             }
             if "ingest_runs" not in tables:
                 return False, None
+            accepted_scopes = {
+                tuple(sorted({term.strip().casefold() for term in scope if term.strip()}))
+                for scope in accepted_path_contains
+            }
+            required_tops = {
+                term.strip().casefold() for term in required_include_tops if term.strip()
+            }
+            required_root_key = (
+                os.path.normcase(str(required_root.expanduser().resolve()))
+                if required_root is not None
+                else None
+            )
             rows = conn.execute(
                 """
                 SELECT completed_at, stats_json
@@ -100,8 +125,24 @@ def sqlite_latest_full_ingest(db_path: Path) -> tuple[bool, str | None]:
                     stats = json.loads(stats_json or "{}")
                 except (TypeError, json.JSONDecodeError):
                     continue
-                if stats.get("path_contains") or stats.get("max_files"):
+                if _normalized_terms(stats.get("path_contains")) not in accepted_scopes:
                     continue
+                if stats.get("max_files"):
+                    continue
+                if required_tops and not required_tops.issubset(
+                    set(_normalized_terms(stats.get("include_tops")))
+                ):
+                    continue
+                if stats.get("scan_errors"):
+                    continue
+                if required_root_key is not None:
+                    run_root = stats.get("root")
+                    if (
+                        not isinstance(run_root, str)
+                        or os.path.normcase(str(Path(run_root).expanduser().resolve()))
+                        != required_root_key
+                    ):
+                        continue
                 files_seen = stats.get("files_seen")
                 if not isinstance(files_seen, int) or files_seen <= 0:
                     continue
@@ -133,10 +174,18 @@ def check_sqlite_index(
     *,
     required: bool,
     max_age_hours: int | None = None,
+    accepted_path_contains: tuple[tuple[str, ...], ...] = ((),),
+    required_include_tops: tuple[str, ...] = (),
+    required_root: Path | None = None,
 ) -> PreflightCheck:
     count, error = sqlite_table_count(db_path, table)
     latest = sqlite_max_value(db_path, table, "indexed_at")
-    has_ingest_runs, latest_full_ingest = sqlite_latest_full_ingest(db_path)
+    has_ingest_runs, latest_full_ingest = sqlite_latest_full_ingest(
+        db_path,
+        accepted_path_contains=accepted_path_contains,
+        required_include_tops=required_include_tops,
+        required_root=required_root,
+    )
     freshness_value = latest_full_ingest if has_ingest_runs else latest
     evidence: dict[str, Any] = {
         "path": str(db_path),
@@ -149,6 +198,9 @@ def check_sqlite_index(
         if has_ingest_runs
         else f"{table}.indexed_at",
         "max_age_hours": max_age_hours,
+        "accepted_path_contains": [list(scope) for scope in accepted_path_contains],
+        "required_include_tops": list(required_include_tops),
+        "required_root": str(required_root.resolve()) if required_root is not None else None,
     }
     if error:
         status = "fail" if required else "warn"
@@ -288,12 +340,24 @@ def check_mail_freshness(
 ) -> PreflightCheck:
     latest_received = sqlite_max_value(db_path, "mails", "received")
     latest_indexed_at = sqlite_max_value(db_path, "mails", "indexed_at")
-    freshness_value = latest_indexed_at or latest_received
+    has_ingest_runs, latest_full_ingest = sqlite_latest_full_ingest(db_path)
+    freshness_value = (
+        latest_full_ingest if has_ingest_runs else latest_indexed_at or latest_received
+    )
     freshness_dt = parse_iso_datetime(freshness_value)
     evidence = {
         "path": str(db_path),
         "latest_received": latest_received,
         "latest_indexed_at": latest_indexed_at,
+        "latest_full_ingest_at": latest_full_ingest,
+        "freshness_at": freshness_value,
+        "freshness_source": (
+            "ingest_runs.completed_at"
+            if has_ingest_runs
+            else "mails.indexed_at"
+            if latest_indexed_at
+            else "mails.received"
+        ),
         "max_age_hours": max_age_hours,
     }
     if freshness_dt is None:
@@ -358,6 +422,7 @@ def run_preflight(
             "files",
             required=require_indexes,
             max_age_hours=config.max_index_age_hours,
+            required_root=config.source_root,
         ),
         check_sqlite_index(
             "style_index",
@@ -365,6 +430,7 @@ def run_preflight(
             "style_hits",
             required=require_indexes,
             max_age_hours=config.max_index_age_hours,
+            required_root=config.source_root,
         ),
         check_style_parse_health(config.style_db_path),
         check_sqlite_index("mail_index", config.mail_db_path, "mails", required=require_indexes),
@@ -379,6 +445,9 @@ def run_preflight(
             "sketches",
             required=require_indexes,
             max_age_hours=config.max_index_age_hours,
+            accepted_path_contains=((), ("sketch",)),
+            required_include_tops=("Talbots",),
+            required_root=config.source_root,
         ),
         check_layout_specs(config.layout_spec_dir, required=require_indexes),
     ]
