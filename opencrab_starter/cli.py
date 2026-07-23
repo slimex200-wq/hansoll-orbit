@@ -89,6 +89,15 @@ def main() -> None:
     judge_parser.add_argument("--expected-after")
     judge_parser.add_argument("--limit", type=int, default=8)
 
+    style_card_parser = subparsers.add_parser(
+        "style-card",
+        help="Build a compact style evidence card with source roles and workflow controls",
+    )
+    style_card_parser.add_argument("--query", required=True)
+    style_card_parser.add_argument("--sender")
+    style_card_parser.add_argument("--expected-after")
+    style_card_parser.add_argument("--limit", type=int, default=30)
+
     mail_refresh_parser = subparsers.add_parser(
         "mail-refresh",
         help="Build or refresh the configured thin mail index from exported mail files",
@@ -263,6 +272,30 @@ def main() -> None:
             limit=args.limit,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "style-card":
+        from .decision_engine import judge_query
+
+        result = judge_query(
+            config,
+            args.query,
+            sender=args.sender,
+            expected_after=args.expected_after,
+            limit=args.limit,
+        )
+        compact = {
+            "query": result["query"],
+            "style_evidence_cards": result["style_evidence_cards"],
+            "decisions": {
+                "information": result["decisions"]["information"],
+                "risks": result["decisions"]["risks"],
+                "clarification_hooks": result["decisions"]["clarification_hooks"],
+                "confidence": result["decisions"]["confidence"],
+                "final_guardrail": result["decisions"]["final_guardrail"],
+            },
+        }
+        print(json.dumps(compact, ensure_ascii=False, indent=2))
         return
 
     if args.command == "mail-refresh":

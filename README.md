@@ -238,6 +238,20 @@ Find prior mail context before drafting:
 python -m opencrab_starter.cli mail-context --query "supplier issue subject or pasted mail text" --sender "sender name"
 ```
 
+Build a compact style evidence card before style-dependent business output:
+
+```powershell
+python -m opencrab_starter.cli style-card `
+  --query "264900911 HO26 OUTLET C/O PPS MGF TD" `
+  --limit 30
+```
+
+The card groups Development, Costing, PO/SBD, WIP, Submit, TP, and latest-mail
+evidence by role. It also separates workflow controls from informational
+transitions. A Development Projection may be set from prior-season comparison
+to reserve a planning line; a later PO/SBD quantity is the confirmed working
+quantity, so that change is not treated as an error by itself.
+
 Build or refresh a thin mail index from exported `.eml`, `.txt`, or `.html` mail files:
 
 ```powershell

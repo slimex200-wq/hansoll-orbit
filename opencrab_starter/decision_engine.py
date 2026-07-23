@@ -8,6 +8,7 @@ from typing import Any
 from .config import OpenCrabConfig
 from .knowledge import load_rule_files
 from .mail_history import extract_search_terms, extract_style_numbers, load_mail_context
+from .workflow_control import build_style_evidence_cards
 
 
 NINE_SPACES = [
@@ -139,11 +140,15 @@ def judge_query(
     evidence = gather_evidence(
         config, query, classification, sender=sender, expected_after=expected_after, limit=limit
     )
-    decisions = build_decisions(classification, evidence)
+    style_evidence_cards = build_style_evidence_cards(classification["styles"], evidence)
+    decisions = build_decisions(
+        classification, evidence, workflow_cards=style_evidence_cards
+    )
     return {
         "query": query,
         "nine_spaces": build_nine_spaces(query, classification, evidence, decisions),
         "classification": classification,
+        "style_evidence_cards": style_evidence_cards,
         "evidence_summary": evidence,
         "decisions": decisions,
     }
@@ -260,16 +265,32 @@ def gather_evidence(
     }
 
 
-def build_decisions(classification: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+def build_decisions(
+    classification: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    workflow_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     concept = classification["primary_concept"]
     actions = list(_actions_for_concept(concept))
     policies = list(_policies_for_concept(concept))
     risks = list(_risk_checks(classification, evidence))
+    information: list[str] = []
+    for card in workflow_cards or []:
+        actions.append(f"{card['style_no']}: {card['next_action']}")
+        risks.extend(card["blocking_risks"])
+        quantity_control = card["quantity_control"]
+        if quantity_control["severity"] == "info":
+            information.append(f"{card['style_no']}: {quantity_control['message']}")
+    actions = _ordered_unique(actions)
+    risks = _ordered_unique(risks)
+    information = _ordered_unique(information)
     hooks = list(_clarification_hooks(classification, evidence))
     confidence = _confidence(classification, evidence, risks)
     return {
         "recommended_next_actions": actions,
         "applicable_policies": policies,
+        "information": information,
         "risks": risks,
         "clarification_hooks": hooks,
         "confidence": confidence,
@@ -626,6 +647,11 @@ def _policies_for_concept(concept: str) -> list[str]:
     policies = [
         "Source priority: explicit file, OneDrive template/workbook, WIP/allocation, mail, TP/BOM/sketch, thin index pointer.",
         "Do not finalize customer-facing Excel from snippets alone.",
+        (
+            "Development Projection is a provisional line quantity based on prior-season "
+            "comparison; later PO/SBD quantity controls actual order work, and the difference "
+            "is not an error by itself."
+        ),
     ]
     if concept == "color_submit":
         policies.extend(

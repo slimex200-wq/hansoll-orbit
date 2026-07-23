@@ -1,6 +1,6 @@
 # Current Session Handoff - OpenCrab Talbots
 
-Updated: 2026-07-10
+Updated: 2026-07-23
 
 This file exists so a fresh Codex chat can behave like the current long-running "Park Daeri" session.
 
@@ -51,21 +51,21 @@ If a very recent mail is needed and not indexed, ask the user for the pasted mai
 
 Last verified audit status from `C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab`:
 
-- thin file index: 9,283 rows
-- business style index: 119,621 rows
-- mail index: 12,293 unique source rows
-- visual sketch index: 1,273 rows
+- thin file index: 9,491 rows
+- business style index: 121,701 rows
+- mail index: 14,137 unique source rows
+- visual sketch index: 1,349 rows
 - layout specs: 3
 - project rules: 4
-- production audit: PASS as of 2026-07-10 (`ok=true`, `ready_for_mail_dependent_work=true`, 0 failures, 1 warning)
-- remaining warning: 23 source-specific parse errors (16 damaged/nonstandard PDFs, 4 locked workbooks, 2 bad ZIP workbooks, 1 invalid-XML workbook); dependency errors are 0
+- production audit: PASS as of 2026-07-23 (`ok=true`, `ready_for_mail_dependent_work=true`, 0 failures, 1 warning)
+- remaining warning: 24 source-specific parse errors (5 currently locked/open workbooks, 1 invalid-XML workbook, 2 bad ZIP workbooks, 16 damaged/nonstandard PDFs); dependency errors are 0
 
-Last verified index timestamps as of 2026-07-10 KST:
+Last verified index timestamps as of 2026-07-23 KST:
 
-- thin full ingest completed: 2026-07-10 11:30 KST
-- style full ingest completed: 2026-07-10 11:36 KST
-- mail full ingest completed: 2026-07-10 11:41 KST
-- visual canonical `Talbots + sketch` ingest completed: 2026-07-10 11:56 KST
+- thin full ingest completed: 2026-07-23 16:15 KST
+- style incremental ingest completed: 2026-07-23 16:20 KST
+- visual canonical `Talbots + sketch` ingest completed: 2026-07-23 16:22 KST
+- mail full ingest completed: 2026-07-23 16:44 KST
 
 ## Operating Style
 
@@ -98,6 +98,9 @@ Last verified index timestamps as of 2026-07-10 KST:
 18. For Talbots SBD/ACC CPO work, `CPO X Ref` (`3016...`) is `Master PO` and `CPO No` (`650...`/`651...`) is `Sub PO`. Always verify PO fields together with `C3`/grand total before saying the SBD is complete.
 19. For costing recap work, never make a new analysis-table workbook as the final deliverable. Copy the existing season/division recap workbook or relevant tab first, preserve the official layout, and use evidence tables only as internal notes.
 20. CEO recap and costing recap are different deliverables. If the user points to `Talbots\Development\<season>\OUTLET` or says CEO recap/TP photos/allocation recap, work from the Development CEO recap workbook, not the COSTING folder.
+21. Development/Allocation `Projection` is a provisional line quantity commonly set from prior-season comparison. A later PO/SBD quantity is the confirmed working quantity, so a Projection-to-PO difference is normal information rather than a mismatch error.
+22. `C/O`, `Release Product`, `Proceed to Bulk`, or `Direct to Bulk` does not automatically waive PPS/FPP/QA/MGF TD gates. Keep any newer mail condition such as `Treat as PPS` or `Subject to MGF TD approval`.
+23. `No Bulk Commit` blocks final Bulk quantity, lot, and submission yardage. Never substitute Projection for missing committed quantity.
 
 ## Template And Source Map
 
@@ -141,6 +144,8 @@ When Korean paths display as mojibake in PowerShell, rely on `.env`, `opencrab_s
 
 ## Recent Corrections
 
+- Internal accident reports must follow the previously approved company tone and three-cell layout: `사고내용`, `사고원인`, `조치사항`. Keep the language factual and terse, use a dated progress history plus one short cause summary, and split the final text into three separately copyable blocks for AX/company-form pasting. Avoid polished AI-style explanations.
+- For L/Dip dispatch work, correct color spellings against the latest attached chart, but explicitly mark a user-added color that is absent from that chart. If the chart has no direct style/units mapping, leave those fields `TBD` instead of borrowing an older style.
 - SP'27 OUTLET APR work was clarified by the user as CEO recap, not costing recap. Correct CEO recap output is `Talbots\Development\SP27\OUTLET\SP27_Outlet_APR_TXT_ceo_recap_TP_photos_filled.xlsx`, copied from `SP27_Outlet_ceo_recap_TP_photos_filled.xlsx`, with `APR TXT` + `T&A` sheets and styles `271952230`, `271952238`, `271952239`, `271952240`. Future CEO recap work must stay in Development and preserve the allocation/TP photos format.
 - Do not assume SP'27 APR OUTLET is TXT only. For Outlet Knit Tops, also check `SPRING 27 / TALBOTS OUTLET/ KNIT TOPS / LAB DIP REQUEST`; the 2026-05-23 Demetra mail says the Spring 27 lab dip chart was updated with April BM dips/new additions dated 2026-05-22.
 - For SP'27 Dress/Knit Dresses APR BM, the exact subject `Knit Dresses- April BM- Outlet` may not appear in the mailbox search. Cross-check `Talbots\Development\SP27\SP27_FEB MAR APR BM_MGF LP SAMPLE TRACKING CHART_DRESS.xlsx` and the `SP'27-MGF K- DRESS (FL26022055 KNIT TEXTURE JACQUARD ) - HANSOLL` thread before concluding no dress evidence exists.

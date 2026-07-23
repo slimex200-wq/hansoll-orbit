@@ -143,6 +143,20 @@ python -m opencrab_starter.cli mail-context `
   --expected-after "2026-05-15T18:03:00+09:00"
 ```
 
+For a style-dependent task, build the compact evidence card before opening the
+final template:
+
+```powershell
+python -m opencrab_starter.cli style-card `
+  --query "style season division current issue" `
+  --limit 30
+```
+
+Review `workflow_status`, `quantity_control`, `control_flags`, and
+`blocking_risks`. Projection-to-PO quantity movement is informational because
+Projection is a provisional line quantity. Only confirmed-source conflicts or
+missing confirmed quantity for a final artifact should stop the work.
+
 Validate generated Excel layout before sending or sharing:
 
 ```powershell

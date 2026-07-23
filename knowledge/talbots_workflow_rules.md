@@ -1,6 +1,6 @@
 # Talbots Workflow Rules
 
-Updated: 2026-07-10
+Updated: 2026-07-23
 
 ## Source Priority
 
@@ -17,6 +17,14 @@ Updated: 2026-07-10
 - If sources conflict, prefer user-attached/latest named files first, then latest mail, then WIP/allocation/recap, then TP/BOM/sketch/costing references.
 - Separate verified facts from assumptions in final reports. Label inferred outputs as draft.
 - Before reporting Excel work complete, verify filled cells against the evidence table and add or update `SOURCE_NOTES` when the workbook benefits from traceability.
+
+## Quantity Lifecycle Rules
+
+- Treat Development/Allocation `Projection` as a provisional line quantity used before order confirmation. It is commonly set by comparing prior-season performance and is not the final order quantity.
+- When a later PO, VPO, SBD, or confirmed order export exists, use that confirmed source for working order quantity and submit `UNITS ORDERED`.
+- A difference between Projection and later PO/SBD quantity is a normal planning-to-confirmed transition and must be reported as information, not as a mismatch error.
+- If only Projection exists, do not fill final order units from it. Use `TBD` or `SEE WIP` until a confirmed source is available.
+- Escalate quantity only when confirmed sources conflict with each other, entity or packing-group totals do not reconcile, or the requested final artifact has no confirmed quantity source.
 
 ## Runtime Judgment Engine
 
@@ -46,12 +54,26 @@ Updated: 2026-07-10
 - If approval is pending, prepare the relevant L/Dip submit form.
 - For multiple color combos, create one workbook tab per combo when the template expects combo separation.
 - Do not collapse approved and pending combos into one tab when their next action differs.
+- `C/O`, `Release Product`, `Proceed to Bulk`, or `Direct to Bulk` allows reference or bulk preparation but does not automatically waive PPS, FPP, QA, or MGF TD approval gates.
+- `Treat as PPS` and `Subject to MGF TD approval` must remain live conditions until a newer approval instruction is found.
+- `No Bulk Commit` blocks final Bulk quantity, lot, and submission-yardage fields; do not substitute Projection.
+- For `Resubmit`, `Next Dip`, or another color option, confirm the prior mail round before numbering the new submit.
+- Exclude `Dropped` colors/styles from both submit forms and dispatch logs unless the user explicitly asks for a dropped-item record.
 
 ## Output Review Rules
 
 - Validate generated Excel layout before sharing or sending.
 - Human review is required before sending mail, sharing generated Excel, or acting on ambiguous color/status evidence.
 - If a generated form layout differs from the known template, treat it as a regression and fix the generator/spec before reuse.
+
+## Internal Accident Report Rules
+
+- Follow the confirmed three-cell structure: `사고내용`, `사고원인`, `조치사항`.
+- In `사고내용`, state the style/GAC and immediate issue first, followed only by Fabric Air cost, profit impact, and delivery status supported by source evidence.
+- In `사고원인`, use a dated progress history and finish with one short `원인 요약`. Keep the cause plain and operational; do not add polished or speculative explanation.
+- In `조치사항`, use no more than three numbered items covering the actual control, delivery follow-up, and recurrence prevention.
+- Match the user's internal business wording and mixed Korean/English terms. Avoid generic consultant language, repeated conclusions, and AI-style narrative transitions.
+- When the user will paste into AX or a company form, provide the three cell bodies separately with plain line breaks and hyphen bullets. Do not use a Markdown table.
 
 ## Costing Recap Rules
 
