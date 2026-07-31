@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections import Counter
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,14 @@ NINE_SPACES = [
     ("strategy", "전략"),
     ("target_context", "대상"),
 ]
+
+
+def _read_connection(db_path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(db_path, timeout=5.0)
+    connection.execute("pragma busy_timeout=5000")
+    connection.execute("pragma query_only=on")
+    connection.row_factory = sqlite3.Row
+    return connection
 
 CONCEPT_KEYWORDS: dict[str, list[str]] = {
     "color_submit": [
@@ -127,6 +137,61 @@ STYLE_DEPENDENT_CONCEPTS = {
     "order_or_po",
 }
 
+PORTFOLIO_QUERY_TERMS = (
+    "이번 주",
+    "금주",
+    "전체",
+    "현황",
+    "목록",
+    "리스트",
+    "위험",
+    "리스크",
+    "waiting",
+    "pending",
+    "회신 대기",
+    "승인 대기",
+)
+
+CURRENT_WORK_QUERY_TERMS = (
+    "\uc624\ub298",
+    "\uc774\ubc88 \uc8fc",
+    "\uae08\uc8fc",
+    "\ud604\uc7ac",
+    "\uc9c0\uae08",
+    "\ubc14\ub85c",
+    "\ucd5c\uc2e0",
+    "\uc9c0\uc5f0",
+    "\uc704\ud5d8",
+    "\ub300\uae30",
+    "today",
+    "this week",
+    "current",
+    "now",
+    "latest",
+    "urgent",
+    "overdue",
+)
+
+HISTORICAL_STYLE_PATTERN = re.compile(r"^(20\d{2})\d{5}$")
+KST = timezone(timedelta(hours=9))
+SENDER_QUERY_PATTERNS = (
+    re.compile(
+        r"(?<![A-Za-z])(?P<name>[A-Za-z][A-Za-z .,'-]{0,39}?)\s*"
+        r"(?:차장|과장|부장|대리|팀장|님)?\s*"
+        r"(?:한테서|에게서|로부터|한테|에게)\s*(?:오늘\s*)?온\s*메일",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z])(?P<name>[A-Za-z][A-Za-z .,'-]{0,39}?)\s*"
+        r"(?:차장|과장|부장|대리|팀장|님)?\s*(?:이|가)?\s*보낸\s*메일",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:from|sender)\s*[:=]?\s*(?P<name>[A-Za-z][A-Za-z .,'-]{0,39})",
+        re.IGNORECASE,
+    ),
+)
+
 
 def judge_query(
     config: OpenCrabConfig,
@@ -137,8 +202,20 @@ def judge_query(
     limit: int = 8,
 ) -> dict[str, Any]:
     classification = classify_query(query)
+    resolved_sender = sender or extract_sender_hint(query)
+    resolved_received_after = infer_received_after(query)
+    classification["mail_scope"] = {
+        "sender": resolved_sender,
+        "received_after": resolved_received_after,
+    }
     evidence = gather_evidence(
-        config, query, classification, sender=sender, expected_after=expected_after, limit=limit
+        config,
+        query,
+        classification,
+        sender=resolved_sender,
+        expected_after=expected_after,
+        received_after=resolved_received_after,
+        limit=limit,
     )
     style_evidence_cards = build_style_evidence_cards(classification["styles"], evidence)
     decisions = build_decisions(
@@ -154,10 +231,36 @@ def judge_query(
     }
 
 
+def extract_sender_hint(query: str) -> str | None:
+    if "메일" not in query.casefold() and "mail" not in query.casefold():
+        return None
+    for pattern in SENDER_QUERY_PATTERNS:
+        match = pattern.search(query)
+        if not match:
+            continue
+        name = re.sub(r"\s+", " ", match.group("name")).strip(" ,.'-")
+        if name:
+            return name
+    return None
+
+
+def infer_received_after(query: str) -> str | None:
+    normalized = query.casefold()
+    if "오늘" not in normalized and "today" not in normalized:
+        return None
+    start_of_today = datetime.now(KST).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return start_of_today.astimezone(UTC).isoformat()
+
+
 def classify_query(query: str) -> dict[str, Any]:
     normalized = query.lower()
     styles = extract_style_numbers(query)
-    terms = extract_search_terms(query)
+    terms = _ordered_unique([*extract_search_terms(query), *_domain_search_terms(normalized)])
     concept_scores = {
         concept: sum(1 for keyword in keywords if keyword in normalized)
         for concept, keywords in CONCEPT_KEYWORDS.items()
@@ -180,6 +283,16 @@ def classify_query(query: str) -> dict[str, Any]:
     divisions = _detect_divisions(normalized)
     primary_concept = concepts[0] if concepts else "general_business_lookup"
     primary_intent = intents[0] if intents else _default_intent(primary_concept)
+    portfolio_query = not styles and any(
+        term in normalized for term in PORTFOLIO_QUERY_TERMS
+    )
+    current_work_query = not styles and any(
+        term in normalized for term in CURRENT_WORK_QUERY_TERMS
+    )
+    requires_style = (
+        primary_concept in STYLE_DEPENDENT_CONCEPTS
+        and not portfolio_query
+    )
     return {
         "styles": styles,
         "terms": terms,
@@ -190,8 +303,29 @@ def classify_query(query: str) -> dict[str, Any]:
         "seasons": seasons,
         "divisions": divisions,
         "strategy_route": _strategy_route(primary_concept, primary_intent),
-        "requires_style": primary_concept in STYLE_DEPENDENT_CONCEPTS,
+        "requires_style": requires_style,
+        "portfolio_query": portfolio_query,
+        "current_work_query": current_work_query,
     }
+
+
+def _domain_search_terms(normalized: str) -> list[str]:
+    aliases = {
+        "gac": ("gac",),
+        "회신 대기": ("waiting",),
+        "승인 대기": ("pending",),
+        "지연": ("delay", "late"),
+        "납기": ("gac", "delivery"),
+        "랩딥": ("l/dip",),
+        "서밋": ("submit",),
+        "디스패치": ("dispatch",),
+    }
+    return [
+        search_term
+        for phrase, search_terms in aliases.items()
+        if phrase in normalized
+        for search_term in search_terms
+    ]
 
 
 def gather_evidence(
@@ -201,32 +335,98 @@ def gather_evidence(
     *,
     sender: str | None,
     expected_after: str | None,
+    received_after: str | None,
     limit: int,
 ) -> dict[str, Any]:
     styles = classification["styles"]
     terms = classification["terms"]
-    style_hits = search_style_hits(config.style_db_path, styles, query, terms, limit=limit)
+    current_work_scan = bool(classification.get("current_work_query")) and not styles
+    retrieval_limit = limit * 50 if current_work_scan else limit
+    style_query = query
+    style_terms = terms
+    if classification.get("portfolio_query") and "gac" in terms:
+        style_query = "gac"
+        style_terms = ["gac"]
+    style_hits = search_style_hits(
+        config.style_db_path,
+        styles,
+        style_query,
+        style_terms,
+        limit=retrieval_limit,
+    )
     facts = search_facts(
         config.workspace / "data" / "talbots_thin_ontology.sqlite",
         styles,
         query,
         terms,
-        limit=limit,
+        limit=retrieval_limit,
     )
     sketches = search_sketches(
-        config.visual_db_path, styles, query, terms, limit=max(3, limit // 2)
+        config.visual_db_path,
+        styles,
+        query,
+        terms,
+        limit=max(3, retrieval_limit // 2),
     )
+    recency_guard = {
+        "applied": False,
+        "excluded_historical_count": 0,
+        "excluded_styles": [],
+        "excluded_by_index": {},
+    }
+    if classification.get("current_work_query") and not styles:
+        require_active_wip = classification.get("primary_concept") in {
+            "wip_update",
+            "mail_followup",
+        }
+        style_hits, excluded_style_hits = _exclude_historical_rows(
+            style_hits,
+            require_active_wip=require_active_wip,
+        )
+        facts, excluded_facts = _exclude_historical_rows(
+            facts,
+            require_active_wip=require_active_wip,
+        )
+        sketches, excluded_sketches = _exclude_historical_rows(
+            sketches,
+            require_active_wip=require_active_wip,
+        )
+        excluded_rows = [*excluded_style_hits, *excluded_facts, *excluded_sketches]
+        recency_guard = {
+            "applied": True,
+            "excluded_historical_count": len(excluded_rows),
+            "excluded_styles": sorted(
+                {
+                    style
+                    for row in excluded_rows
+                    for style in _row_style_numbers(row)
+                }
+            ),
+            "excluded_by_index": {
+                "style_index": len(excluded_style_hits),
+                "fact_index": len(excluded_facts),
+                "visual_index": len(excluded_sketches),
+            },
+        }
+        style_hits = style_hits[:limit]
+        facts = facts[:limit]
+        sketches = sketches[: max(3, limit // 2)]
+        if classification.get("primary_concept") == "wip_update":
+            active_wip_hits = search_active_wip_hits(config.style_db_path, limit=limit)
+            style_hits = _merge_evidence_rows(active_wip_hits, style_hits, limit=limit)
     project_rules = match_project_rules(
         (config.project_root or config.workspace) / "knowledge",
         query,
         classification,
         limit=limit,
     )
+    mail_query = " ".join([query, *terms])
     mail_context = load_mail_context(
         config.mail_db_path,
-        query,
+        mail_query,
         sender=sender,
         expected_after=expected_after,
+        received_after=received_after,
         limit=limit,
         max_age_hours=config.max_mail_age_hours,
     )
@@ -249,6 +449,10 @@ def gather_evidence(
         "mail_index": {
             "db_path": str(config.mail_db_path),
             "available": mail_context.get("available", False),
+            "temporarily_busy": mail_context.get("temporarily_busy", False),
+            "sender_filter": mail_context.get("sender_filter"),
+            "expected_after": mail_context.get("expected_after"),
+            "received_after": mail_context.get("received_after"),
             "mail_count": mail_context.get("mail_count"),
             "latest_received": mail_context.get("latest_received"),
             "latest_indexed_at": mail_context.get("latest_indexed_at"),
@@ -262,7 +466,76 @@ def gather_evidence(
         },
         "project_rules": project_rules,
         "observed_context": summarize_observed_context(style_hits, facts),
+        "recency_guard": recency_guard,
     }
+
+
+def _exclude_historical_rows(
+    rows: list[dict[str, Any]],
+    *,
+    require_active_wip: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    current: list[dict[str, Any]] = []
+    historical: list[dict[str, Any]] = []
+    for row in rows:
+        candidate_styles = _row_style_numbers(row)
+        old_styles = _row_historical_styles(row)
+        relative_path = str(row.get("relative_path") or "").casefold()
+        outside_active_wip = require_active_wip and "wip" not in relative_path
+        if outside_active_wip or (
+            candidate_styles and len(old_styles) == len(candidate_styles)
+        ):
+            historical.append(row)
+        else:
+            current.append(row)
+    return current, historical
+
+
+def _row_style_numbers(row: dict[str, Any]) -> list[str]:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "style_no",
+            "relative_path",
+            "snippet",
+            "raw_compact",
+            "nearby_text",
+        )
+    )
+    return extract_style_numbers(text)
+
+
+def _row_historical_styles(row: dict[str, Any]) -> list[str]:
+    oldest_active_year = datetime.now(UTC).year - 1
+    historical: list[str] = []
+    for style in _row_style_numbers(row):
+        match = HISTORICAL_STYLE_PATTERN.fullmatch(style)
+        if match and int(match.group(1)) < oldest_active_year:
+            historical.append(style)
+    return historical
+
+
+def _merge_evidence_rows(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in [*primary, *secondary]:
+        key = (
+            str(row.get("style_no") or ""),
+            str(row.get("relative_path") or ""),
+            str(row.get("location") or row.get("sheet_name") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+        if len(merged) >= limit:
+            break
+    return merged
 
 
 def build_decisions(
@@ -438,8 +711,7 @@ def search_style_hits(
 ) -> list[dict[str, Any]]:
     if not db_path.exists() or not _has_table(db_path, "style_hits"):
         return []
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
+    con = _read_connection(db_path)
     try:
         if styles:
             placeholders = ",".join("?" for _ in styles)
@@ -475,6 +747,45 @@ def search_style_hits(
         con.close()
 
 
+def search_active_wip_hits(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
+    if not db_path.exists() or not _has_table(db_path, "style_hits"):
+        return []
+    con = _read_connection(db_path)
+    try:
+        rows = con.execute(
+            """
+            select style_no, relative_path, location, snippet, source, indexed_at
+            from style_hits
+            where lower(relative_path) like '%wip%mgf wip%'
+              and lower(relative_path) not like '%old%'
+            order by indexed_at desc, relative_path, location
+            limit 5000
+            """
+        ).fetchall()
+        hits = [_row_dict(row, max_preview=300) for row in rows]
+        hits.sort(key=_active_wip_sort_key)
+        return hits[:limit]
+    finally:
+        con.close()
+
+
+def _active_wip_sort_key(row: dict[str, Any]) -> tuple[int, str, str]:
+    today = datetime.now(UTC).date()
+    text = str(row.get("snippet") or "")
+    dates: list[datetime] = []
+    for value in re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", text):
+        try:
+            dates.append(datetime.strptime(value, "%Y-%m-%d"))
+        except ValueError:
+            continue
+    distance = min((abs((value.date() - today).days) for value in dates), default=99_999)
+    return (
+        distance,
+        str(row.get("relative_path") or ""),
+        str(row.get("location") or ""),
+    )
+
+
 def search_facts(
     db_path: Path,
     styles: list[str],
@@ -485,8 +796,7 @@ def search_facts(
 ) -> list[dict[str, Any]]:
     if not db_path.exists() or not _has_table(db_path, "facts"):
         return []
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
+    con = _read_connection(db_path)
     try:
         columns = """
             style_no, season, division, form_type, fact_type, color_name, quality_code,
@@ -538,8 +848,7 @@ def search_sketches(
 ) -> list[dict[str, Any]]:
     if not db_path.exists() or not _has_table(db_path, "sketches"):
         return []
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
+    con = _read_connection(db_path)
     try:
         if styles:
             placeholders = ",".join("?" for _ in styles)
@@ -706,11 +1015,19 @@ def _risk_checks(classification: dict[str, Any], evidence: dict[str, Any]) -> li
         and requested_divisions.isdisjoint(observed_divisions)
     ):
         risks.append("Requested division does not match observed division evidence.")
-    if len(observed["divisions"]) > 1 and not classification["divisions"]:
+    if (
+        len(observed["divisions"]) > 1
+        and not classification["divisions"]
+        and not classification.get("portfolio_query")
+    ):
         risks.append(
             "Multiple divisions appear in evidence; division should be confirmed before output."
         )
-    if len(observed["seasons"]) > 1 and not classification["seasons"]:
+    if (
+        len(observed["seasons"]) > 1
+        and not classification["seasons"]
+        and not classification.get("portfolio_query")
+    ):
         risks.append(
             "Multiple seasons appear in evidence; season should be confirmed before output."
         )
@@ -729,9 +1046,17 @@ def _clarification_hooks(classification: dict[str, Any], evidence: dict[str, Any
     if evidence["mail_index"].get("db_may_be_stale"):
         hooks.append("Should I refresh or should you paste the latest mail body before I draft?")
     observed = evidence["observed_context"]
-    if len(observed["divisions"]) > 1 and not classification["divisions"]:
+    if (
+        len(observed["divisions"]) > 1
+        and not classification["divisions"]
+        and not classification.get("portfolio_query")
+    ):
         hooks.append(f"Division is ambiguous in evidence: {', '.join(observed['divisions'])}.")
-    if len(observed["seasons"]) > 1 and not classification["seasons"]:
+    if (
+        len(observed["seasons"]) > 1
+        and not classification["seasons"]
+        and not classification.get("portfolio_query")
+    ):
         hooks.append(f"Season is ambiguous in evidence: {', '.join(observed['seasons'])}.")
     return hooks
 
@@ -848,7 +1173,7 @@ def _search_likes(values: list[str]) -> list[str]:
 
 
 def _has_table(db_path: Path, table_name: str) -> bool:
-    con = sqlite3.connect(db_path)
+    con = _read_connection(db_path)
     try:
         row = con.execute(
             "select 1 from sqlite_master where type='table' and name=?",

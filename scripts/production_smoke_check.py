@@ -52,11 +52,23 @@ REQUIRED_FILES = [
 IGNORED_PRIVATE_PREFIXES = (
     "data/",
     "outputs/",
+    "output/",
     "node_modules/",
     ".omx/",
     "tmp/",
     "opencrab_data/",
 )
+
+SECRET_FILE_NAMES = {"auth.json", "credentials.json", "tokens.json"}
+PACKAGE_PRIVATE_SUFFIXES = (".sqlite", ".sqlite3", ".db", ".duckdb", ".env")
+
+
+def is_generated_secret(path: str) -> bool:
+    normalized = path.replace("\\", "/").casefold()
+    return (
+        normalized.rsplit("/", 1)[-1] in SECRET_FILE_NAMES
+        or "/codex-home/" in f"/{normalized}"
+    )
 
 DEPENDENCY_IMPORT_OVERRIDES = {
     "pillow": "PIL",
@@ -134,7 +146,38 @@ def check_git_ignored_private_paths(root: Path) -> str:
     ]
     if offenders:
         raise RuntimeError("tracked private/generated files: " + ", ".join(offenders[:20]))
-    return "no private data/output/database paths tracked"
+    ignored_output = subprocess.run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
+    ignored = [
+        line.strip().replace("\\", "/")
+        for line in ignored_output.splitlines()
+        if line.strip()
+    ]
+    untracked_output = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
+    untracked = [
+        line.strip().replace("\\", "/")
+        for line in untracked_output.splitlines()
+        if line.strip()
+    ]
+    secret_files = [path for path in [*tracked, *untracked, *ignored] if is_generated_secret(path)]
+    if secret_files:
+        raise RuntimeError(
+            "generated authentication files must be removed: " + ", ".join(secret_files[:20])
+        )
+    return "no tracked private data or generated authentication files"
 
 
 def check_private_prefixes_ignored(root: Path) -> str:
@@ -209,9 +252,35 @@ def check_declared_runtime_dependencies(root: Path) -> str:
     return f"{len(dependencies)} declared runtime dependencies import"
 
 
+def check_packaged_private_data(package_dir: Path) -> str:
+    if not package_dir.exists() or not package_dir.is_dir():
+        raise RuntimeError(f"package directory not found: {package_dir}")
+    offenders: list[str] = []
+    archives: list[Path] = []
+    for candidate in package_dir.rglob("*"):
+        if not candidate.is_file():
+            continue
+        relative = candidate.relative_to(package_dir).as_posix()
+        lowered = candidate.name.casefold()
+        if lowered in SECRET_FILE_NAMES or lowered.endswith(PACKAGE_PRIVATE_SUFFIXES):
+            offenders.append(relative)
+        if candidate.name.casefold() == "app.asar":
+            archives.append(candidate)
+    for archive in archives:
+        data = archive.read_bytes()
+        if re.search(rb"[A-Z0-9._%+-]+@hansoll\.com", data, re.IGNORECASE):
+            offenders.append(f"{archive.relative_to(package_dir).as_posix()}: company email")
+        if re.search(rb"C:\\+Users\\+[^\\\x00]{1,80}\\+OneDrive\s*-", data, re.IGNORECASE):
+            offenders.append(f"{archive.relative_to(package_dir).as_posix()}: private OneDrive path")
+    if offenders:
+        raise RuntimeError("packaged private data: " + ", ".join(offenders[:20]))
+    return f"{len(archives)} app archive(s) and packaged files contain no private data artifacts"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run OpenCrab production-readiness smoke checks.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    parser.add_argument("--package-dir", type=Path, help="Also scan a packaged app directory for private data.")
     args = parser.parse_args()
 
     root = workspace_root()
@@ -228,6 +297,13 @@ def main() -> int:
             lambda: check_declared_runtime_dependencies(root),
         ),
     ]
+    if args.package_dir:
+        checks.append(
+            run_check(
+                "packaged_private_data",
+                lambda: check_packaged_private_data(args.package_dir.resolve()),
+            )
+        )
     ok = all(item.ok for item in checks)
     if args.json:
         print(json.dumps([item.__dict__ for item in checks], ensure_ascii=False, indent=2))

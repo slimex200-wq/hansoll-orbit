@@ -10,7 +10,9 @@ import uuid
 from contextlib import closing, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from opencrab_starter.mail_history import load_mail_context
 from scripts.ingest_mail_thin_index import build_index, build_parser, parse_mail, status
 
 
@@ -27,8 +29,11 @@ We found CREASE MARK defect and need replacement schedule for S#261900006-002.
 
 class MailThinIngestTests(unittest.TestCase):
     @staticmethod
-    def _build(source: Path, db_path: Path) -> None:
-        args = build_parser().parse_args(["build", "--source", str(source), "--db", str(db_path)])
+    def _build(source: Path, db_path: Path, *, incremental: bool = False) -> None:
+        command = ["build", "--source", str(source), "--db", str(db_path)]
+        if incremental:
+            command.append("--incremental")
+        args = build_parser().parse_args(command)
         with redirect_stdout(StringIO()):
             result = build_index(args)
         if result != 0:
@@ -160,6 +165,28 @@ class MailThinIngestTests(unittest.TestCase):
         self.assertEqual(record.sender, "Astrid")
         self.assertIn("261900006-002", record.style_numbers)
         self.assertIn("S#261900006-002", record.subject)
+
+    def test_parse_text_mail_keeps_outer_outlook_date_over_quoted_thread_dates(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_outer_date_{uuid.uuid4().hex}"
+        root.mkdir(parents=True)
+        try:
+            path = root / "outlook.txt"
+            path.write_text(
+                "Subject: RE: TALBOTS SU27 Bead neck embellishment\n"
+                "From: vendor@example.com\n"
+                "Date: Wed, 08 Jul 2026 13:21:47 GMT\n"
+                "EntryID: ABC123\n"
+                "\n"
+                "Latest reply body\n"
+                "From: older@example.com\n"
+                "Date: malformed quoted date\n",
+                encoding="utf-8",
+            )
+            record = parse_mail(path, "2026-07-30T00:00:00+00:00")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(record.received, "2026-07-08T13:21:47+00:00")
 
     def test_build_index_creates_mail_history_compatible_schema(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
@@ -325,6 +352,104 @@ class MailThinIngestTests(unittest.TestCase):
         self.assertEqual(len(fts_rows), 1)
         self.assertEqual(fts_rows[0][0], new_mail_id)
         self.assertIn("CREASE MARK", fts_rows[0][1])
+
+    def test_build_removes_records_for_deleted_files_in_same_export(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
+        source = root / "export"
+        source.mkdir(parents=True)
+        try:
+            path = source / "sample.eml"
+            path.write_text(EML, encoding="utf-8")
+            db_path = root / "mail.sqlite"
+            self._create_ontology_schema(db_path)
+            self._build(source, db_path)
+            path.unlink()
+
+            self._build(source, db_path)
+            with closing(sqlite3.connect(db_path)) as conn:
+                mail_count = conn.execute("SELECT COUNT(*) FROM mails").fetchone()[0]
+                style_count = conn.execute("SELECT COUNT(*) FROM mail_style_refs").fetchone()[0]
+                fts_count = conn.execute("SELECT COUNT(*) FROM mail_fts").fetchone()[0]
+                journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(mail_count, 0)
+        self.assertEqual(style_count, 0)
+        self.assertEqual(fts_count, 0)
+        self.assertEqual(journal_mode, "wal")
+
+    def test_agent_can_read_mail_while_wal_writer_is_active(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
+        source = root / "export"
+        source.mkdir(parents=True)
+        try:
+            (source / "sample.eml").write_text(EML, encoding="utf-8")
+            db_path = root / "mail.sqlite"
+            self._build(source, db_path)
+            writer = sqlite3.connect(db_path)
+            try:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute("UPDATE mails SET subject = subject WHERE mail_id IS NOT NULL")
+                context = load_mail_context(db_path, "261900006-002")
+            finally:
+                writer.rollback()
+                writer.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertTrue(context["available"])
+        self.assertFalse(context.get("temporarily_busy", False))
+        self.assertIn("261900006-002", context["hits"][0]["subject"])
+
+    def test_incremental_build_skips_unchanged_mail(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
+        source = root / "export"
+        source.mkdir(parents=True)
+        try:
+            (source / "sample.eml").write_text(EML, encoding="utf-8")
+            db_path = root / "mail.sqlite"
+            self._build(source, db_path)
+            self._build(source, db_path, incremental=True)
+            with closing(sqlite3.connect(db_path)) as conn:
+                stats = json.loads(
+                    conn.execute(
+                        "SELECT stats_json FROM ingest_runs ORDER BY completed_at DESC LIMIT 1"
+                    ).fetchone()[0]
+                )
+                mail_count = conn.execute("SELECT COUNT(*) FROM mails").fetchone()[0]
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(mail_count, 1)
+        self.assertEqual(stats["mails_indexed"], 0)
+        self.assertEqual(stats["mails_skipped_unchanged"], 1)
+
+    def test_parse_failure_removes_prior_searchable_mail_for_that_source(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"
+        source = root / "export"
+        source.mkdir(parents=True)
+        try:
+            path = source / "sample.eml"
+            path.write_text(EML, encoding="utf-8")
+            db_path = root / "mail.sqlite"
+            self._build(source, db_path)
+            path.write_text("changed but unreadable", encoding="utf-8")
+
+            with patch(
+                "scripts.ingest_mail_thin_index.parse_mail",
+                side_effect=ValueError("malformed mail"),
+            ):
+                self._build(source, db_path, incremental=True)
+
+            with closing(sqlite3.connect(db_path)) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM mails").fetchone()[0], 0)
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM mail_source_state").fetchone()[0],
+                    0,
+                )
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_build_preserves_history_from_another_export_folder(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"mail_ingest_{uuid.uuid4().hex}"

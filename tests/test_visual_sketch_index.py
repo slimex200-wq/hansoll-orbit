@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 from opencrab_starter.preflight import check_sqlite_index
 from scripts.visual_sketch_index import (
     build_index,
+    connect_db,
     compute_features,
     extract_image_file,
     find_style,
@@ -33,6 +34,23 @@ def sample_sketch_bytes() -> bytes:
 
 
 class VisualSketchIndexTests(unittest.TestCase):
+    def test_connections_use_bounded_locks_and_query_only_reads(self) -> None:
+        temp_root = Path.cwd() / ".test_tmp"
+        temp_root.mkdir(exist_ok=True)
+        root = temp_root / f"visual_{uuid.uuid4().hex}"
+        root.mkdir()
+        try:
+            db = root / "visual.sqlite"
+            with closing(connect_db(db, write=True)) as conn:
+                self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
+                self.assertEqual(conn.execute("PRAGMA query_only").fetchone()[0], 0)
+                self.assertIn(conn.execute("PRAGMA journal_mode").fetchone()[0], {"wal", "memory"})
+            with closing(connect_db(db)) as conn:
+                self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
+                self.assertEqual(conn.execute("PRAGMA query_only").fetchone()[0], 1)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     def test_find_style_from_path_text(self) -> None:
         self.assertEqual(find_style("TP/271730054 sketch.png"), "271730054")
 

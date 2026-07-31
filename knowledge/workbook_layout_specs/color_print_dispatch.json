@@ -1,0 +1,34 @@
+{
+  "sheet_count": 1,
+  "sheets": [
+    {
+      "match": {
+        "anchors": {
+          "B2": "PRINT NAME:",
+          "B3": "SEASON:",
+          "D2": "SUBMIT DATE:"
+        }
+      },
+      "match_count": 1,
+      "required_values": {
+        "B2": "PRINT NAME:",
+        "B3": "SEASON:",
+        "B5": "MILL:",
+        "B6": "QUALITY #:",
+        "B11": "STYLE NUMBER:",
+        "B13": "COLOR COMBOS/COMMENTS:",
+        "D2": "SUBMIT DATE:"
+      },
+      "non_empty": [
+        "C2",
+        "C3",
+        "C5",
+        "C6",
+        "C11",
+        "E2"
+      ],
+      "bordered_ranges": [],
+      "merged_ranges": []
+    }
+  ]
+}

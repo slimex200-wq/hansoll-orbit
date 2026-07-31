@@ -1,0 +1,10 @@
+{
+  "microsoft": {
+    "tenantId": "REPLACE-WITH-MICROSOFT-ENTRA-TENANT-ID",
+    "clientId": "REPLACE-WITH-PUBLIC-CLIENT-APPLICATION-ID",
+    "browserFallback": true,
+    "lookbackDays": 30,
+    "syncIntervalMinutes": 30,
+    "sharedMailboxes": []
+  }
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -72,12 +73,63 @@ def extract_search_terms(text: str, max_terms: int = 12) -> list[str]:
     return terms[:max_terms]
 
 
+MAIL_DB_LOCK_RETRY_DELAYS = (0.2, 0.5)
+
+
 def load_mail_context(
     db_path: Path,
     query: str,
     *,
     sender: str | None = None,
     expected_after: str | None = None,
+    received_after: str | None = None,
+    limit: int = 10,
+    max_age_hours: int = 72,
+) -> dict[str, Any]:
+    for attempt in range(len(MAIL_DB_LOCK_RETRY_DELAYS) + 1):
+        try:
+            return _load_mail_context_once(
+                db_path,
+                query,
+                sender=sender,
+                expected_after=expected_after,
+                received_after=received_after,
+                limit=limit,
+                max_age_hours=max_age_hours,
+            )
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).casefold():
+                raise
+            if attempt < len(MAIL_DB_LOCK_RETRY_DELAYS):
+                time.sleep(MAIL_DB_LOCK_RETRY_DELAYS[attempt])
+
+    return {
+        "db_path": str(db_path),
+        "available": False,
+        "temporarily_busy": True,
+        "error": "mail DB is temporarily busy during Outlook synchronization",
+        "query": query,
+        "latest_received": None,
+        "latest_indexed_at": None,
+        "freshness_source": None,
+        "max_age_hours": max_age_hours,
+        "age_hours": None,
+        "db_may_be_stale": True,
+        "hits": [],
+        "drafting_guardrail": (
+            "Outlook synchronization is updating the mail index. "
+            "Continue with file evidence and retry mail evidence shortly."
+        ),
+    }
+
+
+def _load_mail_context_once(
+    db_path: Path,
+    query: str,
+    *,
+    sender: str | None = None,
+    expected_after: str | None = None,
+    received_after: str | None = None,
     limit: int = 10,
     max_age_hours: int = 72,
 ) -> dict[str, Any]:
@@ -97,9 +149,11 @@ def load_mail_context(
             "drafting_guardrail": "Mail DB is unavailable. Refresh mail ingest before drafting.",
         }
 
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=5.0)
     con.row_factory = sqlite3.Row
     try:
+        con.execute("PRAGMA busy_timeout = 5000")
+        con.execute("PRAGMA query_only = ON")
         _ensure_mail_schema(con)
         total_mails = con.execute("select count(*) from mails").fetchone()[0]
         latest_received = con.execute("select max(received) from mails").fetchone()[0]
@@ -132,15 +186,42 @@ def load_mail_context(
         terms = extract_search_terms(query)
         hits: dict[str, dict[str, Any]] = {}
 
-        for row in _search_exact(con, query, sender=sender, limit=limit * 2):
+        if sender:
+            for row in _search_sender(
+                con,
+                sender,
+                received_after=received_after,
+                limit=limit * 4,
+            ):
+                _add_hit(hits, row, score=80, reason=f"sender {sender}")
+
+        for row in _search_exact(
+            con,
+            query,
+            sender=sender,
+            received_after=received_after,
+            limit=limit * 2,
+        ):
             _add_hit(hits, row, score=50, reason="exact subject/body match")
 
         for style in styles:
-            for row in _search_style(con, style, sender=sender, limit=limit * 4):
+            for row in _search_style(
+                con,
+                style,
+                sender=sender,
+                received_after=received_after,
+                limit=limit * 4,
+            ):
                 _add_hit(hits, row, score=35, reason=f"same style {style}")
 
         for term in terms:
-            for row in _search_term(con, term, sender=sender, limit=limit * 2):
+            for row in _search_term(
+                con,
+                term,
+                sender=sender,
+                received_after=received_after,
+                limit=limit * 2,
+            ):
                 _add_hit(hits, row, score=10, reason=f"related term {term}")
 
         ranked = sorted(
@@ -155,6 +236,7 @@ def load_mail_context(
             "query": query,
             "sender_filter": sender,
             "expected_after": expected_after,
+            "received_after": received_after,
             "mail_count": total_mails,
             "latest_received": latest_received,
             "latest_indexed_at": latest_indexed_at,
@@ -194,12 +276,14 @@ def _search_exact(
     query: str,
     *,
     sender: str | None,
+    received_after: str | None,
     limit: int,
 ) -> list[sqlite3.Row]:
     text = _like(query)
     where = "(subject like ? or body_preview like ?)"
     params: list[Any] = [text, text]
     where, params = _apply_sender(where, params, sender)
+    where, params = _apply_received_after(where, params, received_after)
     return list(
         con.execute(
             f"""
@@ -219,12 +303,14 @@ def _search_style(
     style: str,
     *,
     sender: str | None,
+    received_after: str | None,
     limit: int,
 ) -> list[sqlite3.Row]:
     text = _like(style)
     where = "(style_numbers like ? or subject like ? or body_preview like ?)"
     params: list[Any] = [text, text, text]
     where, params = _apply_sender(where, params, sender)
+    where, params = _apply_received_after(where, params, received_after)
     return list(
         con.execute(
             f"""
@@ -244,12 +330,38 @@ def _search_term(
     term: str,
     *,
     sender: str | None,
+    received_after: str | None,
     limit: int,
 ) -> list[sqlite3.Row]:
     text = _like(term)
     where = "(subject like ? or body_preview like ? or action_terms like ?)"
     params: list[Any] = [text, text, text]
     where, params = _apply_sender(where, params, sender)
+    where, params = _apply_received_after(where, params, received_after)
+    return list(
+        con.execute(
+            f"""
+            select mail_id, received, sender, subject, body_chars, body_preview
+            from mails
+            where {where}
+            order by received desc
+            limit ?
+            """,
+            [*params, limit],
+        )
+    )
+
+
+def _search_sender(
+    con: sqlite3.Connection,
+    sender: str,
+    *,
+    received_after: str | None,
+    limit: int,
+) -> list[sqlite3.Row]:
+    where = "sender like ?"
+    params: list[Any] = [_like(sender)]
+    where, params = _apply_received_after(where, params, received_after)
     return list(
         con.execute(
             f"""
@@ -272,6 +384,16 @@ def _apply_sender(
     if not sender:
         return where, params
     return f"{where} and sender like ?", [*params, _like(sender)]
+
+
+def _apply_received_after(
+    where: str,
+    params: list[Any],
+    received_after: str | None,
+) -> tuple[str, list[Any]]:
+    if not received_after:
+        return where, params
+    return f"{where} and received >= ?", [*params, received_after]
 
 
 def _add_hit(

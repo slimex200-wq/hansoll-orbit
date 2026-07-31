@@ -41,6 +41,23 @@ class ProductionSmokeCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "tmp/"):
             smoke.check_private_prefixes_ignored(root)
 
+    def test_generated_authentication_files_fail_even_when_ignored(self) -> None:
+        root = self.make_git_repo("**/codex-home/\n")
+        secret = root / "release" / "codex-home" / "tokens.json"
+        secret.parent.mkdir(parents=True)
+        secret.write_text("secret", encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "tokens.json"):
+            smoke.check_git_ignored_private_paths(root)
+
+    def test_unignored_credentials_file_fails(self) -> None:
+        root = self.make_git_repo("")
+        secret = root / "credentials.json"
+        secret.write_text("secret", encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "credentials.json"):
+            smoke.check_git_ignored_private_paths(root)
+
     def test_declared_runtime_dependencies_are_imported(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -90,6 +107,26 @@ dependencies = [
 
         imported = [call.args[0] for call in import_module.call_args_list]
         self.assertIn("opencrab_starter.sbd_validator", imported)
+
+    def test_packaged_app_rejects_private_database(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        package = Path(temp_dir.name)
+        (package / "resources").mkdir()
+        (package / "resources" / "mail-index.sqlite").write_bytes(b"private")
+
+        with self.assertRaisesRegex(RuntimeError, "mail-index.sqlite"):
+            smoke.check_packaged_private_data(package)
+
+    def test_packaged_app_accepts_clean_archive(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        package = Path(temp_dir.name)
+        (package / "resources").mkdir()
+        (package / "resources" / "app.asar").write_bytes(b"clean application code")
+
+        detail = smoke.check_packaged_private_data(package)
+        self.assertIn("1 app archive", detail)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from PIL import Image, ImageOps
+from opencrab_starter.index_lock import index_writer_lock
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
@@ -39,6 +40,7 @@ VECTOR_SIZE = 16
 PROJECTION_BINS = 32
 ORIENTATION_BINS = 8
 MAX_IMAGE_PIXELS = 40_000_000
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
@@ -68,6 +70,17 @@ class ImageFeatures:
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def connect_db(db_path: Path, *, write: bool = False) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1_000)
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    if write:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    else:
+        conn.execute("PRAGMA query_only = ON")
+    return conn
 
 
 def normalize_text(value: object) -> str:
@@ -328,11 +341,12 @@ def extract_zip_media(
 
 def extract_pdf_images(path: Path, root: Path, max_pages: int) -> list[SketchRecord]:
     from pypdf import PdfReader
+    from opencrab_starter.pdf_utils import pdf_reader_source
 
     records: list[SketchRecord] = []
     relative_path = str(path.relative_to(root))
     top_folder = Path(relative_path).parts[0] if Path(relative_path).parts else ""
-    reader = PdfReader(str(path))
+    reader = PdfReader(pdf_reader_source(path))
     for page_index, page in enumerate(reader.pages[:max_pages], start=1):
         try:
             text = normalize_text(page.extract_text() or "")[:1200]
@@ -410,7 +424,7 @@ def extract_records(
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with closing(connect_db(db_path, write=True)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -642,6 +656,11 @@ def index_file(
 
 
 def build_index(args: argparse.Namespace) -> int:
+    with index_writer_lock(args.db.expanduser()):
+        return _build_index_locked(args)
+
+
+def _build_index_locked(args: argparse.Namespace) -> int:
     root = args.root.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"source root is missing or not a directory: {root}")
@@ -671,7 +690,7 @@ def build_index(args: argparse.Namespace) -> int:
         "scan_errors": 0,
         "by_status": {},
     }
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with closing(connect_db(db_path, write=True)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
@@ -752,7 +771,7 @@ def search_index(args: argparse.Namespace) -> int:
         print(json.dumps({"error": "query image could not be vectorized"}, ensure_ascii=False))
         return 2
     query_vector = features.vector
-    with closing(sqlite3.connect(args.db.expanduser())) as conn, conn:
+    with closing(connect_db(args.db.expanduser())) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

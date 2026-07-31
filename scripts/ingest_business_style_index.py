@@ -10,7 +10,7 @@ import re
 import sqlite3
 import sys
 import zipfile
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +35,9 @@ SUPPORTED_EXTENSIONS = {
 MAX_TEXT_CHARS = 400_000
 MAX_PDF_PAGES = 20
 MAX_FILE_BYTES = 80 * 1024 * 1024
+SQLITE_BUSY_TIMEOUT_MS = 30_000
+INDEX_COMMIT_INTERVAL = 250
+INDEX_LOCK_STALE_SECONDS = 6 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,89 @@ def normalize_text(value: object) -> str:
 
 def snippet_hash(snippet: str) -> str:
     return hashlib.sha256(snippet.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def connect_db(db_path: Path, *, write: bool = False) -> sqlite3.Connection:
+    if write:
+        conn = sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1_000)
+    else:
+        conn = sqlite3.connect(
+            f"file:{db_path.resolve().as_posix()}?mode=ro",
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1_000,
+            uri=True,
+        )
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    if write:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    else:
+        conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def _process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            pid,
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+@contextmanager
+def index_writer_lock(db_path: Path):
+    lock_path = db_path.with_suffix(f"{db_path.suffix}.refresh.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor: int | None = None
+    for _attempt in range(2):
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            payload = json.dumps({"pid": os.getpid(), "started_at": utc_now()}).encode("utf-8")
+            os.write(descriptor, payload)
+            os.close(descriptor)
+            descriptor = None
+            break
+        except FileExistsError:
+            try:
+                payload = json.loads(lock_path.read_text(encoding="utf-8"))
+                age = datetime.now(UTC).timestamp() - lock_path.stat().st_mtime
+                stale = age > INDEX_LOCK_STALE_SECONDS or not _process_is_running(int(payload.get("pid") or 0))
+            except (OSError, ValueError, json.JSONDecodeError):
+                stale = True
+            if stale:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            yield False
+            return
+    if not lock_path.exists():
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def find_styles(text: str) -> list[str]:
@@ -117,9 +203,10 @@ def extract_xlsx(path: Path) -> list[StyleHit]:
 
 def extract_pdf(path: Path) -> list[StyleHit]:
     from pypdf import PdfReader
+    from opencrab_starter.pdf_utils import pdf_reader_source
 
     hits: list[StyleHit] = []
-    reader = PdfReader(str(path))
+    reader = PdfReader(pdf_reader_source(path))
     for index, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
         try:
             text = page.extract_text() or ""
@@ -131,19 +218,23 @@ def extract_pdf(path: Path) -> list[StyleHit]:
 
 
 def extract_docx(path: Path) -> list[StyleHit]:
-    from docx import Document
-
     hits: list[StyleHit] = []
-    doc = Document(str(path))
-    for idx, para in enumerate(doc.paragraphs, start=1):
-        text = para.text or ""
-        if STYLE_RE.search(text):
-            hits.extend(make_hits(text, f"paragraph {idx}", "docx"))
-    for table_idx, table in enumerate(doc.tables, start=1):
-        for row_idx, row in enumerate(table.rows, start=1):
-            text = " | ".join(normalize_text(cell.text) for cell in row.cells)
-            if STYLE_RE.search(text):
-                hits.extend(make_hits(text, f"table {table_idx} row {row_idx}", "docx"))
+    namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(path) as archive:
+        xml_names = sorted(
+            name
+            for name in archive.namelist()
+            if name == "word/document.xml"
+            or re.fullmatch(r"word/(?:header|footer|footnotes|endnotes)\d*\.xml", name)
+        )
+        for xml_name in xml_names:
+            root = ElementTree.fromstring(archive.read(xml_name))
+            for index, paragraph in enumerate(root.iter(f"{namespace}p"), start=1):
+                text = " ".join(
+                    node.text or "" for node in paragraph.iter(f"{namespace}t")
+                )
+                if STYLE_RE.search(text):
+                    hits.extend(make_hits(text, f"{xml_name} paragraph {index}", "docx"))
     return hits
 
 
@@ -222,7 +313,7 @@ def extract_hits(path: Path) -> tuple[str, list[StyleHit], str | None]:
 
 def init_db(db_path: Path, with_fts: bool) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with closing(connect_db(db_path, write=True)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -420,10 +511,18 @@ def index_file(
             indexed_at,
         ),
     )
-    return 1, 0, status
+    return 1, 1 if status == "error" else 0, status
 
 
 def build_index(args: argparse.Namespace) -> int:
+    with index_writer_lock(args.db) as acquired:
+        if not acquired:
+            print(json.dumps({"status": "already_running", "db": str(args.db)}, ensure_ascii=False))
+            return 0
+        return _build_index_locked(args)
+
+
+def _build_index_locked(args: argparse.Namespace) -> int:
 
     root = args.root.expanduser().resolve()
     include_tops = {item for item in args.include_top if item}
@@ -446,7 +545,7 @@ def build_index(args: argparse.Namespace) -> int:
         "by_status": {},
     }
 
-    with closing(sqlite3.connect(args.db)) as conn, conn:
+    with closing(connect_db(args.db, write=True)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO ingest_runs(run_id, started_at, completed_at, stats_json) VALUES (?, ?, ?, ?)",
             (run_id, started_at, None, json.dumps(stats, ensure_ascii=False)),
@@ -469,8 +568,9 @@ def build_index(args: argparse.Namespace) -> int:
             if status == "unchanged":
                 stats["unchanged"] += 1
             stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
-            if stats["files_seen"] % args.progress_every == 0:
+            if stats["files_seen"] % INDEX_COMMIT_INTERVAL == 0:
                 conn.commit()
+            if stats["files_seen"] % max(1, args.progress_every) == 0:
                 print(
                     json.dumps(
                         {
@@ -507,10 +607,9 @@ def build_index(args: argparse.Namespace) -> int:
 
 
 def search_index(args: argparse.Namespace) -> int:
-    init_db(args.db, with_fts=False)
     query = args.query.strip()
     like = f"%{query}%"
-    with closing(sqlite3.connect(args.db)) as conn, conn:
+    with closing(connect_db(args.db)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -530,8 +629,7 @@ def search_index(args: argparse.Namespace) -> int:
 
 
 def index_stats(args: argparse.Namespace) -> int:
-    init_db(args.db, with_fts=False)
-    with closing(sqlite3.connect(args.db)) as conn, conn:
+    with closing(connect_db(args.db)) as conn:
         stats = {
             "db": str(args.db),
             "files": conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],

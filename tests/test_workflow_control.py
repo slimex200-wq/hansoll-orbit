@@ -164,6 +164,48 @@ class WorkflowControlTests(unittest.TestCase):
             any(flag["code"] == "exclude_dropped" for flag in card["control_flags"])
         )
 
+    def test_latest_mail_second_strike_off_overrides_older_first_round_file(self) -> None:
+        evidence = _evidence(
+            style_hits=[
+                {
+                    "style_no": "271900010",
+                    "relative_path": (
+                        "Talbots\\Submit form\\SP'27 Submit Form\\"
+                        "271900010_1ST_SOFF_SUBMIT_FORM_20260618.xlsx"
+                    ),
+                    "location": "path",
+                    "snippet": "1ST S/O",
+                    "source": "path",
+                    "indexed_at": "2026-06-18T09:00:00+00:00",
+                }
+            ],
+            mail_hits=[
+                {
+                    "mail_id": "m4",
+                    "received": "2026-07-21T01:57:33+00:00",
+                    "sender": "MGF",
+                    "subject": "RE: 271900010 2nd S/O",
+                    "body_preview": (
+                        "Please see comments on 2nd S/O. "
+                        "Screens are slightly blurry."
+                    ),
+                }
+            ],
+        )
+
+        card = build_style_evidence_cards(["271900010"], evidence)[0]
+
+        self.assertEqual(card["workflow_status"], "strike_off_review")
+        self.assertIn("strike_off_round_2", card["stage_signals"])
+        self.assertNotIn("strike_off_round_1", card["stage_signals"])
+        self.assertIn("print_screen_comment", card["stage_signals"])
+        self.assertTrue(
+            any(
+                flag["code"] == "review_print_screen_clarity"
+                for flag in card["control_flags"]
+            )
+        )
+
 
 def _evidence(
     *,

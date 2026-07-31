@@ -22,6 +22,13 @@ DEPENDENCY_ERROR_MARKERS = (
 )
 
 
+def _read_connection(db_path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(db_path, timeout=5.0)
+    connection.execute("pragma busy_timeout=5000")
+    connection.execute("pragma query_only=on")
+    return connection
+
+
 @dataclass(frozen=True)
 class PreflightCheck:
     name: str
@@ -48,7 +55,7 @@ def sqlite_table_count(db_path: Path, table: str) -> tuple[int | None, str | Non
     if not db_path.exists():
         return None, "database missing"
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(_read_connection(db_path)) as conn:
             tables = {
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -65,7 +72,7 @@ def sqlite_max_value(db_path: Path, table: str, column: str) -> str | None:
     if not db_path.exists():
         return None
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(_read_connection(db_path)) as conn:
             tables = {
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -93,7 +100,7 @@ def sqlite_latest_full_ingest(
     if not db_path.exists():
         return False, None
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(_read_connection(db_path)) as conn:
             tables = {
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -246,7 +253,7 @@ def check_style_parse_health(db_path: Path) -> PreflightCheck:
         )
 
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(_read_connection(db_path)) as conn:
             tables = {
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")

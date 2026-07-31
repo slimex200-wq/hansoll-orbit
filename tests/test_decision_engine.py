@@ -11,11 +11,152 @@ from opencrab_starter.decision_engine import (
     build_decisions,
     build_nine_spaces,
     classify_query,
+    extract_sender_hint,
+    infer_received_after,
     judge_query,
 )
 
 
 class DecisionEngineTests(unittest.TestCase):
+    def test_extracts_sender_and_today_scope_from_natural_mail_request(self) -> None:
+        query = "Kate 차장한테 오늘 온 메일 정리좀 해봐"
+
+        self.assertEqual(extract_sender_hint(query), "Kate")
+        self.assertIsNotNone(infer_received_after(query))
+
+    def test_current_work_query_excludes_historical_style_evidence(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"current_work_{uuid.uuid4().hex}"
+        try:
+            workspace = root / "workspace"
+            data = workspace / "data"
+            source = root / "source"
+            knowledge = workspace / "knowledge"
+            data.mkdir(parents=True)
+            source.mkdir(parents=True)
+            knowledge.mkdir(parents=True)
+            style_db = data / "style.sqlite"
+            conn = sqlite3.connect(style_db)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE style_hits (
+                        style_no TEXT, relative_path TEXT, location TEXT,
+                        snippet TEXT, source TEXT, indexed_at TEXT
+                    )
+                    """
+                )
+                conn.executemany(
+                    "INSERT INTO style_hits VALUES (?, ?, ?, ?, 'cell', ?)",
+                    [
+                        (
+                            "202034380",
+                            "Talbots/Liability/COVID - 19 CANCEL/old.xlsx",
+                            "WIP!R20",
+                            "202034380 GAC 3/23/2020 WILL SHIP THIS WEEK",
+                            "2026-07-30T01:00:00+00:00",
+                        ),
+                        (
+                            "202777050",
+                            "Talbots/Liability/COVID - 19 CANCEL/old.xlsx",
+                            "WIP!R21",
+                            "202777050 GAC 3/23/2020 WILL SHIP THIS WEEK",
+                            "2026-07-30T01:00:00+00:00",
+                        ),
+                        (
+                            "271900010",
+                            "Talbots/WIP/MGF WIP SPR27 FRONT LINE_HANSOLL.xlsx",
+                            "WIP!R30",
+                            "271900010 | 2026-08-05 00:00:00 | pending",
+                            "2026-07-30T01:00:00+00:00",
+                        ),
+                    ],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            config = OpenCrabConfig(
+                source_root=source,
+                workspace=workspace,
+                db_path=data / "thin.sqlite",
+                mail_db_path=data / "mail.sqlite",
+                style_db_path=style_db,
+                visual_db_path=data / "visual.sqlite",
+                mail_source=None,
+                max_mail_age_hours=72,
+                layout_spec_dir=knowledge / "workbook_layout_specs",
+            )
+
+            result = judge_query(config, "이번 주 GAC 지연 위험 정리")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        evidence = result["evidence_summary"]
+        self.assertTrue(result["classification"]["current_work_query"])
+        self.assertEqual(
+            [item["style_no"] for item in evidence["style_index"]["top_hits"]],
+            ["271900010"],
+        )
+        self.assertEqual(evidence["recency_guard"]["excluded_historical_count"], 2)
+        self.assertEqual(
+            evidence["recency_guard"]["excluded_styles"],
+            ["202034380", "202777050"],
+        )
+
+    def test_explicit_historical_style_query_keeps_requested_evidence(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"historical_style_{uuid.uuid4().hex}"
+        try:
+            workspace = root / "workspace"
+            data = workspace / "data"
+            source = root / "source"
+            knowledge = workspace / "knowledge"
+            data.mkdir(parents=True)
+            source.mkdir(parents=True)
+            knowledge.mkdir(parents=True)
+            style_db = data / "style.sqlite"
+            conn = sqlite3.connect(style_db)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE style_hits (
+                        style_no TEXT, relative_path TEXT, location TEXT,
+                        snippet TEXT, source TEXT, indexed_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO style_hits VALUES (?, ?, ?, ?, 'cell', ?)",
+                    (
+                        "202034380",
+                        "Talbots/Liability/COVID - 19 CANCEL/old.xlsx",
+                        "WIP!R20",
+                        "202034380 GAC 3/23/2020",
+                        "2026-07-30T01:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            config = OpenCrabConfig(
+                source_root=source,
+                workspace=workspace,
+                db_path=data / "thin.sqlite",
+                mail_db_path=data / "mail.sqlite",
+                style_db_path=style_db,
+                visual_db_path=data / "visual.sqlite",
+                mail_source=None,
+                max_mail_age_hours=72,
+                layout_spec_dir=knowledge / "workbook_layout_specs",
+            )
+
+            result = judge_query(config, "202034380 GAC 확인")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        evidence = result["evidence_summary"]
+        self.assertEqual(evidence["style_index"]["hit_count"], 1)
+        self.assertEqual(evidence["style_index"]["top_hits"][0]["style_no"], "202034380")
+        self.assertEqual(evidence["recency_guard"]["excluded_historical_count"], 0)
+
     def test_classify_costing_update_with_style_context(self) -> None:
         result = classify_query("SP27 outlet 271900017 costing recap에 추가해줘")
 
@@ -33,6 +174,16 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(result["primary_concept"], "color_submit")
         self.assertIn("mail_index", result["strategy_route"])
         self.assertTrue(result["requires_style"])
+
+    def test_portfolio_gac_risk_query_does_not_require_style(self) -> None:
+        result = classify_query("이번 주 GAC 지연 위험과 회신 대기 업무 정리")
+
+        self.assertEqual(result["primary_concept"], "wip_update")
+        self.assertFalse(result["requires_style"])
+        self.assertTrue(result["portfolio_query"])
+        self.assertIn("gac", result["terms"])
+        self.assertIn("waiting", result["terms"])
+        self.assertIn("delay", result["terms"])
 
     def test_classify_ceo_recap_separately_from_costing(self) -> None:
         result = classify_query("271952240 CEO recap TP photos allocation recap 만들어줘")

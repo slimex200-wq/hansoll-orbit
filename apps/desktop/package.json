@@ -1,0 +1,91 @@
+{
+  "name": "opencrab-work-agent",
+  "version": "0.2.0",
+  "private": true,
+  "productName": "HANSOLL ORBIT",
+  "description": "HANSOLL ORBIT work intelligence desktop application",
+  "author": "Hansoll Textile Internal Pilot",
+  "license": "UNLICENSED",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build",
+    "start": "electron .",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node --test electron/*.test.cjs",
+    "test:e2e": "node scripts/e2e.mjs",
+    "test:e2e:empty": "node scripts/e2e-empty-state.mjs",
+    "test:it-review": "node scripts/it-review-smoke.mjs",
+    "build:wam": "node scripts/build-wam-helper.mjs",
+    "build:backend": "node scripts/build-backend-helper.mjs",
+    "package:prod": "npm run build && npm run build:wam && npm run build:backend && electron-builder --config electron-builder.production.cjs --win nsis --x64 --publish never && node scripts/verify-production-release.mjs",
+    "package:prod:dir": "npm run build && npm run build:wam && npm run build:backend && electron-builder --config electron-builder.production.cjs --dir --win --x64 --publish never",
+    "package:it": "npm run build && npm run build:wam && electron-builder --win portable --x64 --publish never",
+    "package:it:dir": "npm run build && npm run build:wam && electron-builder --dir --win --x64 --publish never"
+  },
+  "dependencies": {
+    "@azure/msal-node": "5.4.2",
+    "lucide-react": "1.26.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "thinking-orbs": "^0.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "playwright-core": "^1.61.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5"
+  },
+  "build": {
+    "appId": "com.hansoll.orbit",
+    "productName": "HANSOLL ORBIT",
+    "asar": true,
+    "directories": {
+      "output": "release/it-review-build",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "!electron/*.test.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "it-review/review-mode.json",
+        "to": "it-review/review-mode.json"
+      },
+      {
+        "from": "native/wam-broker/dist/opencrab-wam-broker.exe",
+        "to": "native/opencrab-wam-broker.exe"
+      },
+      {
+        "from": "electron/outlook-desktop.ps1",
+        "to": "native/outlook-desktop.ps1"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "HANSOLL-ORBIT-IT-Review-${version}-${arch}.${ext}",
+      "executableName": "HANSOLL ORBIT",
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "portable": {
+      "unicode": true
+    }
+  }
+}

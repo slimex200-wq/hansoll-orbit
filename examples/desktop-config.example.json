@@ -1,0 +1,10 @@
+{
+  "microsoft": {
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+    "clientId": "00000000-0000-0000-0000-000000000000",
+    "browserFallback": true,
+    "lookbackDays": 180,
+    "syncIntervalMinutes": 10,
+    "sharedMailboxes": []
+  }
+}

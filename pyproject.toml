@@ -7,7 +7,11 @@ dependencies = [
   "openpyxl",
   "Pillow",
   "pypdf",
+  "msal[broker]>=1.20,<2",
 ]
+
+[project.optional-dependencies]
+desktop-build = ["pyinstaller>=6.21,<7"]
 
 [tool.ruff]
 line-length = 100

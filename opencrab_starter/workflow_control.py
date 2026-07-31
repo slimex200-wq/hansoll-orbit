@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
+
+STRIKE_OFF_ROUND_PATTERN = re.compile(
+    r"\b(?P<round>1st|2nd|3rd|4th|first|second|third|fourth)\s*"
+    r"(?:s\s*/?\s*o|s[\s._-]*off|strike[\s-]*off)\b",
+    re.IGNORECASE,
+)
+
+STRIKE_OFF_ROUNDS = {
+    "1st": 1,
+    "first": 1,
+    "2nd": 2,
+    "second": 2,
+    "3rd": 3,
+    "third": 3,
+    "4th": 4,
+    "fourth": 4,
+}
 
 STAGE_SIGNAL_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -67,6 +85,15 @@ STAGE_SIGNAL_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "bulk submit",
             "bulk submission",
             "bulk s/m",
+        ),
+    ),
+    (
+        "print_screen_comment",
+        (
+            "screens are slightly blurry",
+            "screen is slightly blurry",
+            "screens blurry",
+            "screen blurry",
         ),
     ),
     (
@@ -236,8 +263,22 @@ def _source_role(item: dict[str, Any]) -> str:
 
 def _detect_stage_signals(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     matches: dict[str, dict[str, Any]] = {}
+    strike_off_signal: dict[str, Any] | None = None
     for item in sorted(items, key=lambda value: value["timestamp"], reverse=True):
         text = item["text"]
+        if strike_off_signal is None:
+            round_match = STRIKE_OFF_ROUND_PATTERN.search(text)
+            if round_match:
+                round_number = STRIKE_OFF_ROUNDS[round_match.group("round").lower()]
+                strike_off_signal = {
+                    "code": f"strike_off_round_{round_number}",
+                    "matched_pattern": round_match.group(0),
+                    "round": round_number,
+                    "source_role": _source_role(item),
+                    "path": item["relative_path"],
+                    "location": item["location"],
+                    "timestamp": item["timestamp"],
+                }
         for code, patterns in STAGE_SIGNAL_RULES:
             matched_pattern = next((pattern for pattern in patterns if pattern in text), None)
             if not matched_pattern or code in matches:
@@ -250,7 +291,10 @@ def _detect_stage_signals(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "location": item["location"],
                 "timestamp": item["timestamp"],
             }
-    return [matches[code] for code, _ in STAGE_SIGNAL_RULES if code in matches]
+    ordered = [matches[code] for code, _ in STAGE_SIGNAL_RULES if code in matches]
+    if strike_off_signal is not None:
+        ordered.insert(0, strike_off_signal)
+    return ordered
 
 
 def _quantity_control(source_roles: dict[str, dict[str, Any]]) -> dict[str, str]:
@@ -302,6 +346,8 @@ def _workflow_status(stage_signals: list[str]) -> str:
         return "bulk_preparation"
     if "bulk_submit" in signals:
         return "bulk_submit"
+    if any(signal.startswith("strike_off_round_") for signal in signals):
+        return "strike_off_review"
     return "evidence_review_required"
 
 
@@ -358,6 +404,17 @@ def _control_flags(
                 "message": "Confirm the prior round before numbering the resubmit/next dip.",
             }
         )
+    if "print_screen_comment" in signals:
+        flags.append(
+            {
+                "code": "review_print_screen_clarity",
+                "severity": "condition",
+                "message": (
+                    "The latest strike-off comment flags screen clarity. Confirm correction or "
+                    "buyer acceptance before advancing the print submit."
+                ),
+            }
+        )
     if "carryover" in signals and "mgf_td_approval_required" not in signals:
         flags.append(
             {
@@ -407,4 +464,6 @@ def _next_action(workflow_status: str, stage_signals: list[str]) -> str:
         return "Verify current mail and PO, then prepare the appropriate Bulk Submit artifacts."
     if workflow_status == "bulk_submit":
         return "Verify Bulk Commit, lot, and submission yardage before finalizing the form."
+    if workflow_status == "strike_off_review":
+        return "Apply the latest strike-off comments, then confirm whether approval or resubmit follows."
     return "Review the latest mail and original workbook before choosing the next submit stage."

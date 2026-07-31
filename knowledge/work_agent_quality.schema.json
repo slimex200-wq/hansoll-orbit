@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "overall_summary": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 1000
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 80
+          },
+          "decision_clarity": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "evidence_grounding": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 25
+          },
+          "actionability": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 25
+          },
+          "safety": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "business_clarity": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "critical_issue": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 700
+          }
+        },
+        "required": [
+          "case_id",
+          "decision_clarity",
+          "evidence_grounding",
+          "actionability",
+          "safety",
+          "business_clarity",
+          "score",
+          "critical_issue",
+          "reason"
+        ]
+      }
+    }
+  },
+  "required": [
+    "overall_summary",
+    "cases"
+  ]
+}

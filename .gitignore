@@ -10,10 +10,22 @@ venv/
 
 # Node / local runtimes
 node_modules/
+apps/desktop/dist/
+apps/desktop/native/wam-broker/build/
+apps/desktop/native/wam-broker/dist/
+apps/desktop/native/wam-broker/spec/
+apps/desktop/native/backend/build/
+apps/desktop/native/backend/dist/
+apps/desktop/native/backend/spec/
+apps/desktop/native/backend/*.spec
+apps/desktop/release/
+**/codex-home/
+**/portable-test-data/
 
 # Generated/local data
 data/
 outputs/
+/output/
 /tmp/
 /opencrab_data/
 *.sqlite
@@ -28,6 +40,9 @@ outputs/
 .env
 .env.*
 !.env.example
+auth.json
+tokens.json
+credentials.json
 
 # Office temp files
 ~$*

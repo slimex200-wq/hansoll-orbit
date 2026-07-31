@@ -4,13 +4,14 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from .config import load_config
 from .knowledge import load_rule_files
 from .mail_history import load_mail_context
 from .preflight import run_preflight, summarize
 from .production_audit import audit_production_readiness
-from .thin_index import build_index, search_index
+from .thin_index import build_index, remove_index_root, search_index
 
 
 def main() -> None:
@@ -18,7 +19,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="opencrab-starter")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("build-index", help="Build or refresh the thin file index")
+    build_index_parser = subparsers.add_parser(
+        "build-index", help="Build or refresh the thin file index"
+    )
+    build_index_parser.add_argument("--include-top", action="append")
+    build_index_parser.add_argument("--source-root")
+
+    remove_index_parser = subparsers.add_parser(
+        "remove-index-root", help="Remove one linked folder from the thin file index"
+    )
+    remove_index_parser.add_argument("--source-root", required=True)
 
     search_parser = subparsers.add_parser("search", help="Search indexed file pointers")
     search_parser.add_argument("--query", required=True)
@@ -36,6 +46,19 @@ def main() -> None:
     style_refresh_parser.add_argument("--max-hits-per-style-file", type=int, default=3)
     style_refresh_parser.add_argument("--progress-every", type=int, default=250)
     style_refresh_parser.add_argument("--style-db")
+
+    visual_refresh_parser = subparsers.add_parser(
+        "visual-refresh",
+        help="Build or refresh the configured visual sketch index",
+    )
+    visual_refresh_parser.add_argument("--include-top", action="append")
+    visual_refresh_parser.add_argument("--path-contains", action="append")
+    visual_refresh_parser.add_argument("--force", action="store_true")
+    visual_refresh_parser.add_argument("--reset", action="store_true")
+    visual_refresh_parser.add_argument("--max-files", type=int)
+    visual_refresh_parser.add_argument("--max-pdf-pages", type=int, default=6)
+    visual_refresh_parser.add_argument("--progress-every", type=int, default=100)
+    visual_refresh_parser.add_argument("--visual-db")
 
     style_search_parser = subparsers.add_parser(
         "style-search",
@@ -89,6 +112,25 @@ def main() -> None:
     judge_parser.add_argument("--expected-after")
     judge_parser.add_argument("--limit", type=int, default=8)
 
+    work_agent_parser = subparsers.add_parser(
+        "work-agent",
+        help="Return a user-facing Korean answer backed by OpenCrab evidence and judgment",
+    )
+    work_agent_parser.add_argument("--query", required=True)
+    work_agent_parser.add_argument("--sender")
+    work_agent_parser.add_argument("--expected-after")
+    work_agent_parser.add_argument("--limit", type=int, default=8)
+    work_agent_parser.add_argument("--app-context-file")
+    work_agent_parser.add_argument(
+        "--no-model",
+        action="store_true",
+        help="Use deterministic synthesis only",
+    )
+    subparsers.add_parser(
+        "agent-status",
+        help="Show whether model-backed Work Agent synthesis is available",
+    )
+
     style_card_parser = subparsers.add_parser(
         "style-card",
         help="Build a compact style evidence card with source roles and workflow controls",
@@ -106,6 +148,7 @@ def main() -> None:
     mail_refresh_parser.add_argument("--mail-db")
     mail_refresh_parser.add_argument("--path-contains", action="append")
     mail_refresh_parser.add_argument("--reset", action="store_true")
+    mail_refresh_parser.add_argument("--incremental", action="store_true")
     mail_refresh_parser.add_argument("--progress-every", type=int, default=250)
 
     mail_status_parser = subparsers.add_parser(
@@ -113,6 +156,14 @@ def main() -> None:
         help="Show configured thin mail index freshness",
     )
     mail_status_parser.add_argument("--mail-db")
+
+    buyer_signals_parser = subparsers.add_parser(
+        "buyer-signals",
+        help="Aggregate privacy-safe buyer hints from the configured mail index",
+    )
+    buyer_signals_parser.add_argument("--mail-db")
+    buyer_signals_parser.add_argument("--account-email", default="")
+    buyer_signals_parser.add_argument("--limit", type=int, default=2_000)
 
     outlook_export_parser = subparsers.add_parser(
         "outlook-export",
@@ -143,6 +194,35 @@ def main() -> None:
     validate_parser.add_argument("--spec-name")
     validate_parser.add_argument("--json", action="store_true")
 
+    prepare_dispatch_parser = subparsers.add_parser(
+        "prepare-dispatch-workbook",
+        help="Create a clean one-sheet dispatch workbook from the approved cumulative template",
+    )
+    prepare_dispatch_parser.add_argument("--source", required=True)
+    prepare_dispatch_parser.add_argument("--output", required=True)
+    prepare_dispatch_parser.add_argument(
+        "--sheet-kind",
+        required=True,
+        choices=["solid_bulk", "solid_dip", "print"],
+    )
+
+    prepare_artifact_parser = subparsers.add_parser(
+        "prepare-artifact-workbook",
+        help="Create a verified evidence-traceable artifact copy from a company workbook",
+    )
+    prepare_artifact_parser.add_argument("--source", required=True)
+    prepare_artifact_parser.add_argument("--output", required=True)
+    prepare_artifact_parser.add_argument("--artifact-type", required=True)
+    prepare_artifact_parser.add_argument("--source-data-file")
+    prepare_artifact_parser.add_argument("--sheet-kind")
+
+    validate_artifact_parser = subparsers.add_parser(
+        "validate-prepared-artifact",
+        help="Reopen and validate an ORBIT-prepared workbook and its source trace",
+    )
+    validate_artifact_parser.add_argument("--workbook", required=True)
+    validate_artifact_parser.add_argument("--artifact-type", required=True)
+
     validate_sbd_parser = subparsers.add_parser(
         "validate-sbd",
         help="Validate a Talbots SBD workbook against core PO, total, and G/TOTAL rules",
@@ -169,8 +249,14 @@ def main() -> None:
     config = load_config()
 
     if args.command == "build-index":
-        count = build_index(config.source_root, config.db_path)
+        source_root = Path(args.source_root).expanduser() if args.source_root else config.source_root
+        count = build_index(source_root, config.db_path, args.include_top)
         print(json.dumps({"indexed_files": count, "db_path": str(config.db_path)}, indent=2))
+        return
+
+    if args.command == "remove-index-root":
+        count = remove_index_root(config.db_path, Path(args.source_root))
+        print(json.dumps({"removed_files": count, "db_path": str(config.db_path)}, indent=2))
         return
 
     if args.command == "search":
@@ -203,6 +289,23 @@ def main() -> None:
             limit=args.limit,
         )
         raise SystemExit(search_style_index(style_args))
+
+    if args.command == "visual-refresh":
+        from scripts.visual_sketch_index import build_index as build_visual_index
+
+        visual_args = argparse.Namespace(
+            root=config.source_root,
+            db=resolve_workspace_path(args.visual_db, config.visual_db_path, config.workspace),
+            include_top=args.include_top or ["Talbots"],
+            path_contains=args.path_contains,
+            thumb_dir=None,
+            force=args.force,
+            reset=args.reset,
+            max_files=args.max_files,
+            max_pdf_pages=args.max_pdf_pages,
+            progress_every=args.progress_every,
+        )
+        raise SystemExit(build_visual_index(visual_args))
 
     if args.command == "style-stats":
         from scripts.ingest_business_style_index import index_stats
@@ -261,6 +364,18 @@ def main() -> None:
         print(json.dumps(context, ensure_ascii=False, indent=2))
         return
 
+    if args.command == "buyer-signals":
+        from .buyer_signals import collect_buyer_signals
+
+        mail_db_path = resolve_workspace_path(args.mail_db, config.mail_db_path, config.workspace)
+        result = collect_buyer_signals(
+            mail_db_path,
+            account_email=args.account_email,
+            limit=args.limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
     if args.command == "judge":
         from .decision_engine import judge_query
 
@@ -272,6 +387,37 @@ def main() -> None:
             limit=args.limit,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "work-agent":
+        from .work_agent import answer_query
+
+        app_context = None
+        if args.app_context_file:
+            context_path = Path(args.app_context_file)
+            try:
+                loaded_context = json.loads(context_path.read_text(encoding="utf-8"))
+                if isinstance(loaded_context, dict):
+                    app_context = loaded_context
+            except (OSError, json.JSONDecodeError):
+                app_context = None
+
+        result = answer_query(
+            config,
+            args.query,
+            sender=args.sender,
+            expected_after=args.expected_after,
+            limit=args.limit,
+            use_model=not args.no_model,
+            app_context=app_context,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "agent-status":
+        from .agent_synthesis import model_connection_status
+
+        print(json.dumps(model_connection_status(), ensure_ascii=False, indent=2))
         return
 
     if args.command == "style-card":
@@ -309,6 +455,7 @@ def main() -> None:
             db=resolve_workspace_path(args.mail_db, config.mail_db_path, config.workspace),
             path_contains=args.path_contains,
             reset=args.reset,
+            incremental=args.incremental,
             progress_every=args.progress_every,
         )
         raise SystemExit(build_mail_index(mail_args))
@@ -389,6 +536,7 @@ def main() -> None:
             db=resolve_workspace_path(args.mail_db, config.mail_db_path, config.workspace),
             path_contains=None,
             reset=args.reset,
+            incremental=False,
             progress_every=250,
         )
         result = build_mail_index(mail_args)
@@ -418,6 +566,46 @@ def main() -> None:
                 mark = "OK" if item.ok else "ERR"
                 print(f"- {mark} {item.code}: {item.detail}")
         raise SystemExit(0 if ok else 1)
+
+    if args.command == "prepare-dispatch-workbook":
+        from .workbook_prepare import prepare_dispatch_workbook
+
+        source_path = resolve_workspace_path(args.source, None, config.workspace)
+        output_path = resolve_workspace_path(args.output, None, config.workspace)
+        assert source_path is not None
+        assert output_path is not None
+        result = prepare_dispatch_workbook(source_path, output_path, args.sheet_kind)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "prepare-artifact-workbook":
+        from .workbook_prepare import prepare_artifact_workbook
+
+        source_path = resolve_workspace_path(args.source, None, config.workspace)
+        output_path = resolve_workspace_path(args.output, None, config.workspace)
+        assert source_path is not None
+        assert output_path is not None
+        source_data: dict[str, Any] = {}
+        if args.source_data_file:
+            source_data = json.loads(Path(args.source_data_file).read_text(encoding="utf-8-sig"))
+        result = prepare_artifact_workbook(
+            source_path,
+            output_path,
+            args.artifact_type,
+            source_data,
+            args.sheet_kind,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "validate-prepared-artifact":
+        from .workbook_prepare import validate_prepared_artifact
+
+        workbook_path = resolve_workspace_path(args.workbook, None, config.workspace)
+        assert workbook_path is not None
+        findings = validate_prepared_artifact(workbook_path, args.artifact_type)
+        print(json.dumps(findings, ensure_ascii=False, indent=2))
+        raise SystemExit(0 if all(item["ok"] for item in findings) else 1)
 
     if args.command == "validate-sbd":
         from .sbd_validator import findings_ok, validate_sbd_workbook

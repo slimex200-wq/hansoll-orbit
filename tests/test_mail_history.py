@@ -8,11 +8,73 @@ import uuid
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from opencrab_starter.mail_history import extract_style_numbers, load_mail_context
 
 
 class MailHistoryTests(unittest.TestCase):
+    def test_sender_and_received_scope_excludes_body_mentions_and_old_mail(self) -> None:
+        temp_root = Path.cwd() / ".test_tmp"
+        temp_root.mkdir(exist_ok=True)
+        temp_dir = temp_root / f"mail_scope_{uuid.uuid4().hex}"
+        temp_dir.mkdir()
+        try:
+            db_path = temp_dir / "mail.sqlite"
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE mails (
+                        mail_id TEXT PRIMARY KEY, received TEXT, sender TEXT, subject TEXT,
+                        body_chars INTEGER, body_preview TEXT, style_numbers TEXT,
+                        action_terms TEXT
+                    )
+                    """
+                )
+                conn.executemany(
+                    "INSERT INTO mails VALUES (?, ?, ?, ?, ?, ?, '', '')",
+                    [
+                        (
+                            "kate-today",
+                            "2026-07-30T02:00:00+00:00",
+                            "Seo, Kate",
+                            "SP27 update",
+                            20,
+                            "Please review the attached chart.",
+                        ),
+                        (
+                            "nguyen-mentions-kate",
+                            "2026-07-30T03:00:00+00:00",
+                            "Nguyen, Anna",
+                            "HR26 update",
+                            20,
+                            "Dear Kate, please see below.",
+                        ),
+                        (
+                            "kate-old",
+                            "2026-07-29T02:00:00+00:00",
+                            "Seo, Kate",
+                            "Old update",
+                            20,
+                            "Prior request.",
+                        ),
+                    ],
+                )
+                conn.commit()
+
+            context = load_mail_context(
+                db_path,
+                "Kate 차장한테 오늘 온 메일 정리좀 해봐",
+                sender="Kate",
+                received_after="2026-07-30T00:00:00+00:00",
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        self.assertEqual(context["sender_filter"], "Kate")
+        self.assertEqual(context["received_after"], "2026-07-30T00:00:00+00:00")
+        self.assertEqual([item["mail_id"] for item in context["hits"]], ["kate-today"])
+
     def test_extract_style_numbers_keeps_style_and_suffix(self) -> None:
         text = "S#261900006-002 and 233900002-005 need replacement."
         self.assertEqual(extract_style_numbers(text), ["233900002-005", "261900006-002"])
@@ -25,6 +87,23 @@ class MailHistoryTests(unittest.TestCase):
         self.assertFalse(context["available"])
         self.assertTrue(context["db_may_be_stale"])
         self.assertEqual(context["max_age_hours"], 72)
+
+    def test_locked_mail_db_degrades_without_crashing_agent(self) -> None:
+        db_path = Path.cwd() / ".test_tmp" / "locked-mail.sqlite"
+        with (
+            patch(
+                "opencrab_starter.mail_history._load_mail_context_once",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ),
+            patch("opencrab_starter.mail_history.time.sleep") as sleep,
+        ):
+            context = load_mail_context(db_path, "271900010 latest mail")
+
+        self.assertFalse(context["available"])
+        self.assertTrue(context["temporarily_busy"])
+        self.assertTrue(context["db_may_be_stale"])
+        self.assertEqual(context["hits"], [])
+        self.assertEqual(sleep.call_count, 2)
 
     def test_load_mail_context_flags_stale_mail_db(self) -> None:
         temp_root = Path.cwd() / ".test_tmp"

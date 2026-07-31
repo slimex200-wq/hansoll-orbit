@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
+import zipfile
 from argparse import Namespace
 from contextlib import closing, redirect_stdout
 from io import StringIO
@@ -10,10 +12,29 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from opencrab_starter.preflight import check_sqlite_index
-from scripts.ingest_business_style_index import StyleHit, build_index, find_styles, make_hits
+from scripts.ingest_business_style_index import (
+    StyleHit,
+    build_index,
+    connect_db,
+    extract_docx,
+    find_styles,
+    index_writer_lock,
+    make_hits,
+)
 
 
 class BusinessStyleIndexTests(unittest.TestCase):
+    def test_connections_use_bounded_locks_and_query_only_reads(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db = Path(temp_dir) / "style.sqlite"
+            with closing(connect_db(db, write=True)) as conn:
+                self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
+                self.assertEqual(conn.execute("PRAGMA query_only").fetchone()[0], 0)
+                self.assertIn(conn.execute("PRAGMA journal_mode").fetchone()[0], {"wal", "memory"})
+            with closing(connect_db(db)) as conn:
+                self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
+                self.assertEqual(conn.execute("PRAGMA query_only").fetchone()[0], 1)
+
     def test_find_styles_preserves_order_and_deduplicates(self) -> None:
         styles = find_styles("271952207 / 264952221 / 271952207")
         self.assertEqual(styles, ["271952207", "264952221"])
@@ -23,6 +44,20 @@ class BusinessStyleIndexTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].style_no, "271900001")
         self.assertLessEqual(len(hits[0].snippet), 500)
+
+    def test_extract_docx_reads_style_without_optional_dependency(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.docx"
+            document_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>Style 271900010 submit</w:t></w:r></w:p></w:body>
+</w:document>"""
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("word/document.xml", document_xml)
+
+            hits = extract_docx(path)
+
+        self.assertEqual([hit.style_no for hit in hits], ["271900010"])
 
     def build_args(self, root: Path, db: Path, path_contains: list[str] | None = None) -> Namespace:
         return Namespace(
@@ -59,6 +94,25 @@ class BusinessStyleIndexTests(unittest.TestCase):
                 status = conn.execute("SELECT parse_status FROM files").fetchone()[0]
         self.assertEqual(extract.call_count, 2)
         self.assertEqual(status, "parsed")
+
+    def test_duplicate_refresh_returns_without_competing_for_the_database(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Talbots" / "sample.txt"
+            source.parent.mkdir()
+            source.write_text("271900001", encoding="utf-8")
+            db = root / "style.sqlite"
+            args = self.build_args(root, db)
+            with redirect_stdout(StringIO()):
+                build_index(args)
+            output = StringIO()
+            with index_writer_lock(db) as acquired:
+                self.assertTrue(acquired)
+                with redirect_stdout(output):
+                    result = build_index(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue())["status"], "already_running")
 
     def test_prune_respects_path_filter_and_top_scope(self) -> None:
         with TemporaryDirectory() as temp_dir:

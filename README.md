@@ -1,5 +1,20 @@
 # OpenCrab Talbots Workbench
 
+## Desktop Work Agent
+
+The integrated Electron application lives under `apps/desktop`. It connects the existing
+OpenCrab audit, search, mail, and business-judgment engine to work cases, follow-up tasks,
+artifact jobs, timelines, decisions, and administration screens.
+
+```powershell
+cd .\apps\desktop
+npm install
+npm run dev
+```
+
+See `docs/WORK_AGENT_V1.md`, `docs/WORK_AGENT_ARCHITECTURE.md`, and
+`docs/WORK_AGENT_TEST_SPEC.md` for the complete V1 scope and release contract.
+
 This private repository is the Talbots/MGF workbench version of OpenCrab Starter. It keeps the reusable code plus the small operating context needed for fresh Codex chats to behave like the current Park Daeri workflow.
 
 The raw business files still stay outside git in OneDrive. The repository tracks only code, docs, workflow rules, layout specs, and bootstrap notes.
