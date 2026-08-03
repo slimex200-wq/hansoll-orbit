@@ -15,6 +15,9 @@ export function buildSignatureScript(paths) {
   // signature status. The file list therefore has to be embedded in the script.
   const literals = paths.map((item) => `'${String(item).replace(/'/g, "''")}'`).join(",");
   return [
+    // Loaded explicitly so a broken module path fails with a clear error
+    // instead of a confusing autoload failure inside ForEach-Object.
+    "Import-Module Microsoft.PowerShell.Security",
     "$ErrorActionPreference = 'Stop'",
     `$items = @(@(${literals}) | ForEach-Object {`,
     "  $signature = Get-AuthenticodeSignature -LiteralPath $_",
@@ -22,6 +25,18 @@ export function buildSignatureScript(paths) {
     "})",
     "$items | ConvertTo-Json -Compress -Depth 3",
   ].join("; ");
+}
+
+export function powershellEnvironment(base = process.env) {
+  // When this script is launched from PowerShell 7 (the default GitHub
+  // Actions shell), the inherited PSModulePath points at PS7 module
+  // directories. Windows PowerShell 5.1 then resolves
+  // Microsoft.PowerShell.Security to the incompatible PS7 copy and
+  // Get-AuthenticodeSignature fails to load. Dropping the variable lets
+  // 5.1 rebuild its own default module path.
+  const environment = { ...base };
+  delete environment.PSModulePath;
+  return environment;
 }
 
 export function parseSignatureOutput(raw, expectedCount) {
@@ -82,7 +97,7 @@ function main() {
   const raw = execFileSync(
     "powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", buildSignatureScript(executables)],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: powershellEnvironment() },
   );
   const signatures = assertSigned(parseSignatureOutput(raw, executables.length));
 

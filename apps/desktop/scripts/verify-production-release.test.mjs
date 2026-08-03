@@ -5,6 +5,7 @@ import {
   assertSigned,
   buildSignatureScript,
   parseSignatureOutput,
+  powershellEnvironment,
 } from "./verify-production-release.mjs";
 
 test("signature script embeds installer paths instead of relying on $args", () => {
@@ -40,10 +41,16 @@ test(
   { skip: process.platform !== "win32" ? "Windows only" : false },
   () => {
     const target = `${process.env.SystemRoot || "C:\\Windows"}\\System32\\notepad.exe`;
+    // Simulate the pwsh 7 CI shell: a PS7-only PSModulePath used to break
+    // Get-AuthenticodeSignature autoload inside spawned Windows PowerShell.
+    const polluted = {
+      ...process.env,
+      PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules",
+    };
     const raw = execFileSync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", buildSignatureScript([target])],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: powershellEnvironment(polluted) },
     );
     const [signature] = parseSignatureOutput(raw, 1);
     assert.equal(signature.Path.toLowerCase(), target.toLowerCase());

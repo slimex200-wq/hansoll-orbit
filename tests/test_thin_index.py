@@ -63,7 +63,9 @@ class ThinIndexTests(unittest.TestCase):
             self.assertEqual(search_index(db_path, "271900013"), [])
     def test_full_rebuild_prunes_removed_paths_and_records_completion(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            # Hosted runners hand out 8.3 short paths (RUNNER~1) for TEMP while
+            # the indexer stores resolved long paths; resolve before comparing.
+            root = Path(temp_dir).resolve()
             source = root / "source"
             source.mkdir()
             db_path = root / "thin.sqlite"
@@ -87,7 +89,7 @@ class ThinIndexTests(unittest.TestCase):
 
     def test_missing_source_does_not_prune_existing_index(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             source = root / "source"
             source.mkdir()
             db_path = root / "thin.sqlite"
@@ -107,7 +109,7 @@ class ThinIndexTests(unittest.TestCase):
 
     def test_build_can_limit_scan_to_requested_top_folder(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             source = root / "source"
             kept_dir = source / "Talbots"
             ignored_dir = source / "Other"

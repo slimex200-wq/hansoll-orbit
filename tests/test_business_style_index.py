@@ -116,7 +116,9 @@ class BusinessStyleIndexTests(unittest.TestCase):
 
     def test_prune_respects_path_filter_and_top_scope(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            # Hosted runners hand out 8.3 short paths (RUNNER~1) for TEMP while
+            # the indexer stores resolved long paths; resolve before comparing.
+            root = Path(temp_dir).resolve()
             talbots = root / "Talbots"
             other = root / "Other"
             talbots.mkdir()
