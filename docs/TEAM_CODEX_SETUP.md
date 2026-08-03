@@ -9,8 +9,8 @@ Goal: any teammate can install Codex, clone this private repo, run one local boo
 3. Clone the repo:
 
 ```powershell
-git clone https://github.com/slimex200-wq/opencrab-Talbots.git
-cd opencrab-Talbots
+git clone https://github.com/slimex200-wq/hansoll-orbit.git
+cd hansoll-orbit
 ```
 
 4. Run the bootstrap:

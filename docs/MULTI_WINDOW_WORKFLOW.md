@@ -12,11 +12,9 @@ Use one main repository as the source of truth. For ordinary Talbots business re
 
 ## Start Another Business Chat
 
-Open the same project root:
-
-```text
-C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab
-```
+Open the same repository root you already work in (the `hansoll-orbit` checkout).
+Do not open a second copy of the repo for business chats; only task worktrees
+below are meant to be separate folders.
 
 Then tell the new chat to follow `knowledge/new_chat_bootstrap_prompt.md`, or paste that prompt directly.
 
