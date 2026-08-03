@@ -7,6 +7,7 @@ from pathlib import PurePath
 from typing import Any
 
 from .config import OpenCrabConfig
+from .buyer_pack import load_buyer_pack
 from .decision_engine import judge_query
 
 
@@ -251,6 +252,8 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     evidence = judgment.get("evidence_summary") or {}
     decisions = judgment.get("decisions") or {}
     cards = judgment.get("style_evidence_cards") or []
+    pack = load_buyer_pack()
+    playbook = str(pack.get("playbook") or "talbots")
 
     styles = [str(value) for value in classification.get("styles") or [] if value]
     concept = str(classification.get("primary_concept") or "general_business_lookup")
@@ -313,6 +316,7 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         style_hits=style_hits,
         fact_hits=fact_hits,
         cards=cards,
+        playbook=playbook,
     )
     headline = _build_case_headline(
         subject=subject,
@@ -328,6 +332,7 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         style_hits=style_hits,
         cards=cards,
         confirmations=confirmations,
+        playbook=playbook,
     )
     task_suggestions = _tasks_from_action_plan(action_plan, query)
     status = "needs_confirmation" if confirmations else _answer_status(decisions)
@@ -347,6 +352,11 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         answer_text_parts.append("확인 필요: " + " / ".join(confirmations))
 
     return {
+        "buyer": {
+            "id": str(pack.get("buyer_id") or ""),
+            "playbook": playbook,
+            "pack_fallback": bool(pack.get("fallback")),
+        },
         "status": status,
         "headline": headline,
         "summary": summary,
@@ -487,12 +497,13 @@ def _build_recommendation(
     style_hits: list[dict[str, Any]],
     fact_hits: list[dict[str, Any]],
     cards: list[dict[str, Any]],
+    playbook: str = "talbots",
 ) -> dict[str, str]:
     signals = _card_stage_signals(cards)
     stage_labels = _card_stage_labels(cards)
     mail_points = _mail_comment_points(latest_mail)
 
-    if "print_screen_comment" in signals and concept in {
+    if playbook == "talbots" and "print_screen_comment" in signals and concept in {
         "color_submit",
         "mail_followup",
         "general_business_lookup",
@@ -517,7 +528,7 @@ def _build_recommendation(
             ),
         }
 
-    if concept == "color_submit":
+    if playbook == "talbots" and concept == "color_submit":
         if {"l_dip_approved", "proceed_to_bulk", "direct_to_bulk"} & signals:
             return {
                 "state": "ready_after_source_check",
@@ -548,7 +559,7 @@ def _build_recommendation(
             "next_move": "최신 메일과 활성 WIP에서 현재 단계·차수를 확인한 뒤 맞는 양식을 선택합니다.",
         }
 
-    if concept == "costing":
+    if playbook == "talbots" and concept == "costing":
         costing_file = next(
             (
                 str(item.get("relative_path") or "")
@@ -624,11 +635,15 @@ def _build_action_plan(
     style_hits: list[dict[str, Any]],
     cards: list[dict[str, Any]],
     confirmations: list[str],
+    playbook: str = "talbots",
 ) -> list[dict[str, Any]]:
     signals = _card_stage_signals(cards)
     stage_labels = _card_stage_labels(cards)
 
-    if "print_screen_comment" in signals and concept in {
+    # Submit/costing flows below encode the Talbots·MGF process. A buyer
+    # without its own playbook must never receive another buyer's submit
+    # instructions; it falls through to the evidence-first generic plan.
+    if playbook == "talbots" and "print_screen_comment" in signals and concept in {
         "color_submit",
         "mail_followup",
         "general_business_lookup",
@@ -664,7 +679,7 @@ def _build_action_plan(
             ),
         ]
 
-    if concept == "color_submit" and not signals:
+    if playbook == "talbots" and concept == "color_submit" and not signals:
         return [
             _action_step(
                 1,
@@ -689,7 +704,7 @@ def _build_action_plan(
             ),
         ]
 
-    if concept == "color_submit":
+    if playbook == "talbots" and concept == "color_submit":
         return [
             _action_step(
                 1,
@@ -714,7 +729,7 @@ def _build_action_plan(
             ),
         ]
 
-    if concept == "costing":
+    if playbook == "talbots" and concept == "costing":
         source_name = _best_costing_source_name(style_hits, query)
         return [
             _action_step(

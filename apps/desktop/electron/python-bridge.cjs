@@ -15,6 +15,7 @@ let runtimeOptions = {
   e2eMode: false,
   userDataPath: "",
   profileKey: "legacy",
+  buyerId: "",
 };
 const DESKTOP_INTERNAL_AUDIT_ITEMS = new Set([
   "workspace_alignment",
@@ -40,6 +41,10 @@ function configureRuntime(options = {}) {
         : options.e2eMode === true,
     userDataPath: options.userDataPath || runtimeOptions.userDataPath,
     profileKey: options.profileKey || runtimeOptions.profileKey,
+    buyerId:
+      options.buyerId === undefined
+        ? runtimeOptions.buyerId
+        : String(options.buyerId || ""),
   };
 }
 
@@ -96,10 +101,50 @@ function loadEnvValue(repoRoot, key) {
   return line ? line.slice(prefix.length).trim().replace(/^"(.*)"$/, "$1") : null;
 }
 
+// Draft packs the desktop provisions at login live in the user data
+// directory; curated packs ship with the app.
+function resolveUserPacksRoot() {
+  return runtimeOptions.userDataPath
+    ? path.join(runtimeOptions.userDataPath, "buyer-packs")
+    : "";
+}
+
+function collectPackMarkers(root, markers) {
+  try {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const pack = JSON.parse(
+          fs.readFileSync(path.join(root, entry.name, "pack.json"), "utf8"),
+        );
+        for (const marker of pack.source_root_markers || []) {
+          if (typeof marker === "string" && marker.trim()) markers.push(marker.trim());
+        }
+      } catch {
+        // A malformed pack must not break the other buyers.
+      }
+    }
+  } catch {
+    // A missing pack directory falls through to the default marker.
+  }
+}
+
+// Folder names proving a OneDrive root belongs to a known buyer, read from the
+// curated packs and the login-provisioned drafts. Falls back to the Talbots
+// marker so a broken knowledge directory cannot disable source detection.
+function buyerSourceMarkers() {
+  const markers = [];
+  collectPackMarkers(path.join(resolveRepoRoot(), "knowledge", "buyers"), markers);
+  const userRoot = resolveUserPacksRoot();
+  if (userRoot) collectPackMarkers(userRoot, markers);
+  return markers.length ? [...new Set(markers)] : ["Talbots"];
+}
+
 function resolveSourceRoot() {
   const repoRoot = resolveRepoRoot();
   const configured = process.env.OPENCRAB_SOURCE_ROOT || loadEnvValue(repoRoot, "OPENCRAB_SOURCE_ROOT");
   if (configured && fs.existsSync(configured)) return path.resolve(configured);
+  const markers = buyerSourceMarkers();
   const candidates = [
     process.env.OneDriveCommercial,
     process.env.OneDrive,
@@ -110,7 +155,9 @@ function resolveSourceRoot() {
   return candidates
     .filter(Boolean)
     .map((candidate) => path.resolve(candidate))
-    .find((candidate) => fs.existsSync(path.join(candidate, "Talbots"))) || null;
+    .find((candidate) =>
+      markers.some((marker) => fs.existsSync(path.join(candidate, marker))),
+    ) || null;
 }
 
 function enrichSourcePath(item) {
@@ -189,6 +236,10 @@ function runCli(commandArgs, options = {}) {
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
           ...packagedEnvironment,
+          ...(runtimeOptions.buyerId ? { OPENCRAB_BUYER: runtimeOptions.buyerId } : {}),
+          ...(resolveUserPacksRoot()
+            ? { OPENCRAB_BUYER_PACK_USER_DIR: resolveUserPacksRoot() }
+            : {}),
           ...(activeMailContext?.dbPath
             ? { OPENCRAB_MAIL_DB_PATH: activeMailContext.dbPath }
             : {}),
@@ -779,6 +830,7 @@ async function validatePreparedArtifact(workbook, artifactType) {
 module.exports = {
   agentStatus,
   audit,
+  buyerSourceMarkers,
   configureRuntime,
   resolveRuntimeProfileRoot,
   initializeBusinessIndexes,

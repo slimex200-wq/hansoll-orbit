@@ -363,6 +363,11 @@ export interface AgentConnectionStatus {
 }
 
 export interface AgentAnswer {
+  buyer?: {
+    id: string;
+    playbook: string;
+    pack_fallback: boolean;
+  };
   status: "ready_for_review" | "needs_review" | "needs_confirmation";
   headline: string;
   summary: string;

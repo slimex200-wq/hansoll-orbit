@@ -1,0 +1,16 @@
+{
+  "buyer_id": "generic",
+  "label": "Generic buyer",
+  "version": 1,
+  "playbook": "generic",
+  "source_root_markers": [],
+  "source_roles": [
+    { "role": "development_projection", "path_any": ["\\development\\", "allocation"] },
+    { "role": "costing", "path_any": ["\\costing\\"] },
+    { "role": "confirmed_order", "path_any": ["원단발주서", "po sheet", "\\vpo_", "agent-vendor po"] },
+    { "role": "sbd_acc", "path_any": ["sbd", "acc detail"], "text_any": ["order recap"] },
+    { "role": "wip", "path_any": ["\\wip\\", "production plan"] },
+    { "role": "submit_artifact", "path_any": ["submit form"] },
+    { "role": "tech_pack", "path_any": ["_tp_"], "path_suffix_any": [".pdf"], "text_any": ["tech pack"] }
+  ]
+}

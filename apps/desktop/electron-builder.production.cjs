@@ -25,6 +25,10 @@ module.exports = {
       to: "native/outlook-desktop.ps1",
     },
     {
+      from: "../../knowledge/buyers",
+      to: "runtime/knowledge/buyers",
+    },
+    {
       from: "../../knowledge/talbots_workflow_rules.md",
       to: "runtime/knowledge/talbots_workflow_rules.md",
     },

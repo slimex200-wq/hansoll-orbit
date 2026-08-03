@@ -10,6 +10,7 @@ const {
 } = require("./agent-action-service.cjs");
 const { createAgentProviderService } = require("./agent-provider-service.cjs");
 const { createBuyerProfileService } = require("./buyer-profile-service.cjs");
+const { ensureDraftBuyerPack } = require("./buyer-pack-service.cjs");
 const { createDomainStore } = require("./domain-store.cjs");
 const { createLinkedFolderService } = require("./linked-folder-service.cjs");
 const { detectItReviewMode, seedItReviewStore } = require("./it-review-runtime.cjs");
@@ -187,7 +188,33 @@ async function getBuyerProfileSnapshot() {
   });
 }
 
+// Login-time buyer onboarding: whenever the confirmed buyer changes, provision
+// or refresh its draft pack from the buyer's linked folders and mail domains,
+// then point the engine at that buyer. A buyer without a curated pack runs the
+// conservative generic playbook — never another buyer's workflow.
+function syncActiveBuyerRuntime() {
+  const profile = buyerProfiles?.activeProfile?.() || null;
+  if (profile) {
+    try {
+      const folderIds = new Set(profile.folderIds || []);
+      ensureDraftBuyerPack({
+        buyerId: profile.id,
+        buyerName: profile.name,
+        department: profile.department,
+        domains: profile.domains || [],
+        folders: (linkedFolders?.list?.() || []).filter((item) => folderIds.has(item.id)),
+        repoPacksDir: path.join(bridge.resolveRepoRoot(), "knowledge", "buyers"),
+        userPacksDir: path.join(app.getPath("userData"), "buyer-packs"),
+      });
+    } catch (error) {
+      console.error("Buyer pack provisioning failed:", error);
+    }
+  }
+  bridge.configureRuntime({ buyerId: profile?.id || "" });
+}
+
 async function publishBuyerProfileSnapshot() {
+  syncActiveBuyerRuntime();
   if (!buyerProfiles || !mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("buyer-context:changed", await getBuyerProfileSnapshot());
 }
@@ -864,6 +891,7 @@ if (!hasSingleInstanceLock) {
       void publishBuyerProfileSnapshot();
     },
   });
+  syncActiveBuyerRuntime();
   agentCodexHome = path.join(app.getPath("userData"), "codex-home");
   agentProviders = createAgentProviderService({
     configPath: path.join(app.getPath("userData"), "agent-provider.json"),
