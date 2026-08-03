@@ -187,7 +187,12 @@ async function getBuyerProfileSnapshot() {
   });
 }
 
+function syncActiveBuyerRuntime() {
+  bridge.configureRuntime({ buyerId: buyerProfiles?.active?.()?.buyerId || "" });
+}
+
 async function publishBuyerProfileSnapshot() {
+  syncActiveBuyerRuntime();
   if (!buyerProfiles || !mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("buyer-context:changed", await getBuyerProfileSnapshot());
 }
@@ -864,6 +869,7 @@ if (!hasSingleInstanceLock) {
       void publishBuyerProfileSnapshot();
     },
   });
+  syncActiveBuyerRuntime();
   agentCodexHome = path.join(app.getPath("userData"), "codex-home");
   agentProviders = createAgentProviderService({
     configPath: path.join(app.getPath("userData"), "agent-provider.json"),

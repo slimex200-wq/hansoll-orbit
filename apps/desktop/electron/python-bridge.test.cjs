@@ -4,6 +4,7 @@ const test = require("node:test");
 
 const {
   audit,
+  buyerSourceMarkers,
   configureRuntime,
   initializeBusinessIndexes,
   resolveRuntimeProfileRoot,
@@ -21,6 +22,13 @@ test("business index roots are isolated by the active account profile", () => {
   );
   configureRuntime({ profileKey: "legacy" });
   assert.equal(resolveRuntimeProfileRoot(), path.join("C:", "OrbitData"));
+});
+
+test("buyer packs provide the source root markers with a safe default", () => {
+  const markers = buyerSourceMarkers();
+  assert.ok(markers.length >= 1, "no source root markers resolved");
+  assert.ok(markers.includes("Talbots"), "talbots pack marker missing");
+  assert.equal(new Set(markers).size, markers.length, "markers are not deduplicated");
 });
 
 test("partial profile updates preserve active review and E2E modes", async () => {

@@ -4,6 +4,8 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from .buyer_pack import load_buyer_pack, source_role_for
+
 
 STRIKE_OFF_ROUND_PATTERN = re.compile(
     r"\b(?P<round>1st|2nd|3rd|4th|first|second|third|fourth)\s*"
@@ -141,13 +143,18 @@ STAGE_SIGNAL_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 def build_style_evidence_cards(
     styles: list[str], evidence: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    return [_build_style_card(style, evidence) for style in styles]
+    # One pack load per card build; every evidence item is classified with the
+    # active buyer's source-role rules.
+    pack = load_buyer_pack()
+    return [_build_style_card(style, evidence, pack) for style in styles]
 
 
-def _build_style_card(style: str, evidence: dict[str, Any]) -> dict[str, Any]:
+def _build_style_card(
+    style: str, evidence: dict[str, Any], pack: dict[str, Any] | None = None
+) -> dict[str, Any]:
     items = _collect_style_evidence(style, evidence)
-    source_roles = _group_source_roles(items)
-    stage_details = _detect_stage_signals(items)
+    source_roles = _group_source_roles(items, pack)
+    stage_details = _detect_stage_signals(items, pack)
     stage_signals = [item["code"] for item in stage_details]
     quantity_control = _quantity_control(source_roles)
     workflow_status = _workflow_status(stage_signals)
@@ -217,10 +224,12 @@ def _text_for_hit(hit: dict[str, Any]) -> str:
     return " | ".join(str(hit.get(field) or "") for field in fields).lower()
 
 
-def _group_source_roles(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _group_source_roles(
+    items: list[dict[str, Any]], pack: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in items:
-        role = _source_role(item)
+        role = _source_role(item, pack)
         grouped[role].append(
             {
                 "path": item["relative_path"],
@@ -234,34 +243,16 @@ def _group_source_roles(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     }
 
 
-def _source_role(item: dict[str, Any]) -> str:
+def _source_role(item: dict[str, Any], pack: dict[str, Any] | None = None) -> str:
     if item["index"] == "mail_index":
         return "latest_mail"
-    path = item["relative_path"].lower().replace("/", "\\")
-    text = item["text"]
-    if "\\development\\" in path or "allocation" in path:
-        return "development_projection"
-    if "\\costing\\" in path:
-        return "costing"
-    if (
-        "원단발주서" in path
-        or "po sheet" in path
-        or "\\vpo_" in path
-        or "agent-vendor po" in path
-    ):
-        return "confirmed_order"
-    if "sbd" in path or "acc detail" in path or "order recap" in text:
-        return "sbd_acc"
-    if "\\wip\\" in path or "production plan" in path:
-        return "wip"
-    if "submit form" in path:
-        return "submit_artifact"
-    if "tech pack" in text or "_tp_" in path or path.endswith(".pdf"):
-        return "tech_pack"
-    return "other_source"
+    active = pack if pack is not None else load_buyer_pack()
+    return source_role_for(active, item["relative_path"], item["text"])
 
 
-def _detect_stage_signals(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _detect_stage_signals(
+    items: list[dict[str, Any]], pack: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     matches: dict[str, dict[str, Any]] = {}
     strike_off_signal: dict[str, Any] | None = None
     for item in sorted(items, key=lambda value: value["timestamp"], reverse=True):
@@ -274,7 +265,7 @@ def _detect_stage_signals(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "code": f"strike_off_round_{round_number}",
                     "matched_pattern": round_match.group(0),
                     "round": round_number,
-                    "source_role": _source_role(item),
+                    "source_role": _source_role(item, pack),
                     "path": item["relative_path"],
                     "location": item["location"],
                     "timestamp": item["timestamp"],
@@ -286,7 +277,7 @@ def _detect_stage_signals(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             matches[code] = {
                 "code": code,
                 "matched_pattern": matched_pattern,
-                "source_role": _source_role(item),
+                "source_role": _source_role(item, pack),
                 "path": item["relative_path"],
                 "location": item["location"],
                 "timestamp": item["timestamp"],
