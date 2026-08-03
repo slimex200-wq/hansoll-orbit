@@ -9,10 +9,13 @@ receiving another buyer's workflow instructions.
 ## Layout
 
 ```
-knowledge/buyers/
-  talbots/pack.json      # Talbots · MGF (default)
-  generic/pack.json      # fallback for buyers without a pack
-  <buyer_id>/pack.json   # one folder per additional buyer
+knowledge/buyers/            # curated packs, shipped with the app (win)
+  talbots/pack.json          # Talbots · MGF (default)
+  generic/pack.json          # rules and playbook for buyers without a pack
+  <buyer_id>/pack.json       # one folder per additional curated buyer
+
+<userData>/buyer-packs/      # login-provisioned drafts, written by the app
+  <buyer_id>/pack.json       # thin: identity, markers, mail domains only
 ```
 
 ## What a pack controls today
@@ -27,18 +30,35 @@ knowledge/buyers/
 Reserved for later phases: `concept_labels`, `stage_labels`, per-buyer stage
 signal rules, and per-buyer template registries.
 
-## Runtime selection
+## Login-time onboarding (no manual setup)
 
-1. The desktop app confirms a buyer (`buyer-profile-service`); `main.cjs`
-   passes the active `buyerId` to the Python bridge.
-2. The bridge exports `OPENCRAB_BUYER` to every engine process.
-3. `opencrab_starter/buyer_pack.py` resolves: own pack → generic pack with
-   `fallback=true` → built-in copies. The answer payload carries
-   `buyer.{id, playbook, pack_fallback}` so the UI and audits can see when a
-   buyer is running on the generic fallback.
+A buyer manager from another department does not fill in a checklist. On their
+machine the flow is:
+
+1. **Sign in** — Microsoft 365 login creates an isolated account profile
+   (domain store, linked folders, indexes are all per-account already).
+2. **Link folders** — the rep links their OneDrive business folders;
+   `buyer-profile-service` infers buyer candidates from folder names and
+   recent mail domains and asks for one confirmation.
+3. **Confirm buyer** — `main.cjs#syncActiveBuyerRuntime` then:
+   - provisions/refreshes a **draft pack** under `<userData>/buyer-packs/`
+     (`buyer-pack-service.cjs`): label, source-root markers from the linked
+     folders, mail domains. Thin by design — classification rules and the
+     playbook are inherited from the central generic pack at load time.
+   - passes the buyer to the engine (`OPENCRAB_BUYER`,
+     `OPENCRAB_BUYER_PACK_USER_DIR`).
+4. **Engine** resolves packs curated-first: repository pack → login draft →
+   generic fallback. A curated pack shipped later automatically overrides a
+   stale draft. Draft directory names use the same id normalization as the
+   engine (`normalizeBuyerId` ↔ `normalize_buyer_id`), including for Korean
+   buyer names.
+5. **UI** shows a "일반 안전 모드" notice whenever the active playbook is not
+   a tuned one, so nobody mistakes generic guidance for buyer-specific
+   instructions. Hand-edited (non-`draft`) user packs are never overwritten.
 
 Overrides for development and tests: `OPENCRAB_BUYER`,
-`OPENCRAB_BUYER_PACK_DIR`.
+`OPENCRAB_BUYER_PACK_DIR` (curated root), `OPENCRAB_BUYER_PACK_USER_DIR`
+(draft root).
 
 ## Behavior rules
 
@@ -49,24 +69,23 @@ Overrides for development and tests: `OPENCRAB_BUYER`,
 - When a buyer's format changes, bump the pack `version` — do not fork engine
   code and do not silently rewrite an active pack (OneOrder operating rule).
 
-## Onboarding buyer #2 — required inputs
+## Onboarding a new buyer — what is automatic, what is not
 
-Fill this in before creating `knowledge/buyers/<buyer_id>/pack.json`:
+Automatic at login (nothing to collect):
 
-1. **Buyer id and label** — short slug (e.g. `jcp`) and display name.
-2. **OneDrive folder name(s)** — the top-level folder under the business root
-   (`source_root_markers`).
-3. **Folder taxonomy** — where costing, WIP, POs, submit forms, tech packs
-   live (`source_roles` patterns). Copy the talbots pack and adjust.
-4. **Submit/approval workflow** — stages, round numbering, approval gates,
-   and who approves. If it differs from Talbots (it will), the buyer gets its
-   own playbook in `work_agent.py` gated on `playbook == "<buyer_id>"`, plus
-   quality-gate cases for its guardrails.
-5. **Workbook templates** — the company-original Excel forms and their layout
-   specs under `knowledge/workbook_layout_specs/`.
-6. **Mail conventions** — buyer domains and typical subject patterns for the
-   buyer-profile recommender.
+1. Buyer id/label, department — from the confirmed buyer profile.
+2. Source-root markers — from the buyer's linked folders.
+3. Classification rules — inherited from the central generic pack.
+4. Mail domains — from the buyer-profile mail signals.
 
-Steps 1–3 are configuration only. Steps 4–6 decide whether the buyer can run
-on the generic playbook initially (safe, conservative) or needs its tuned flow
-on day one.
+Still requires workflow knowledge (curated pack / tuned playbook):
+
+5. **Submit/approval workflow** — stages, round numbering, approval gates.
+   A tuned playbook in `work_agent.py` gated on `playbook == "<buyer_id>"`,
+   plus quality-gate cases for its guardrails.
+6. **Workbook templates** — company-original Excel forms and layout specs
+   under `knowledge/workbook_layout_specs/`.
+
+Until 5–6 ship, the buyer runs the conservative generic flow with the
+"일반 안전 모드" notice — useful for evidence search, casework and follow-ups,
+and structurally unable to hand out another buyer's submit instructions.

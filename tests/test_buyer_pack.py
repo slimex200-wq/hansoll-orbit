@@ -124,6 +124,52 @@ class BuyerPackTests(unittest.TestCase):
         self.assertEqual(unknown["playbook"], "generic")
         self.assertTrue(unknown["fallback"])
 
+    def test_login_provisioned_draft_pack_is_used_without_fallback_warning(self) -> None:
+        with TemporaryDirectory() as temp:
+            user_dir = Path(temp) / "buyer-packs"
+            (user_dir / "custom-acme-a1b2c3").mkdir(parents=True)
+            (user_dir / "custom-acme-a1b2c3" / "pack.json").write_text(
+                json.dumps(
+                    {
+                        "buyer_id": "custom-acme-a1b2c3",
+                        "label": "Acme · 영업",
+                        "draft": True,
+                        "source_root_markers": ["Acme"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with _environment(
+                OPENCRAB_BUYER="custom-acme-a1b2c3",
+                OPENCRAB_BUYER_PACK_USER_DIR=str(user_dir),
+            ):
+                pack = load_buyer_pack()
+        self.assertFalse(pack["fallback"], "the buyer's own draft is not a fallback")
+        self.assertEqual(pack["playbook"], "generic")
+        self.assertEqual(pack["source_root_markers"], ["Acme"])
+        self.assertTrue(
+            pack["source_roles"],
+            "a thin draft must inherit the central generic classification rules",
+        )
+
+    def test_curated_pack_overrides_a_stale_login_draft(self) -> None:
+        with TemporaryDirectory() as temp:
+            repo_dir = Path(temp) / "curated"
+            user_dir = Path(temp) / "buyer-packs"
+            for root, label in ((repo_dir, "curated"), (user_dir, "draft")):
+                (root / "acme").mkdir(parents=True)
+                (root / "acme" / "pack.json").write_text(
+                    json.dumps({"label": label, "playbook": "generic"}),
+                    encoding="utf-8",
+                )
+            with _environment(
+                OPENCRAB_BUYER="acme",
+                OPENCRAB_BUYER_PACK_DIR=str(repo_dir),
+                OPENCRAB_BUYER_PACK_USER_DIR=str(user_dir),
+            ):
+                pack = load_buyer_pack()
+        self.assertEqual(pack["label"], "curated")
+
     def test_normalize_buyer_id_strips_unsafe_characters(self) -> None:
         self.assertEqual(normalize_buyer_id("  Custom-Acme_01  "), "custom-acme_01")
         self.assertEqual(normalize_buyer_id("한섬유/../.."), "")

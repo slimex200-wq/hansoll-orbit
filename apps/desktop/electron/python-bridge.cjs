@@ -101,13 +101,16 @@ function loadEnvValue(repoRoot, key) {
   return line ? line.slice(prefix.length).trim().replace(/^"(.*)"$/, "$1") : null;
 }
 
-// Folder names proving a OneDrive root belongs to a known buyer, read from the
-// buyer packs under knowledge/buyers. Falls back to the Talbots marker so a
-// broken knowledge directory cannot disable source detection.
-function buyerSourceMarkers() {
-  const markers = [];
+// Draft packs the desktop provisions at login live in the user data
+// directory; curated packs ship with the app.
+function resolveUserPacksRoot() {
+  return runtimeOptions.userDataPath
+    ? path.join(runtimeOptions.userDataPath, "buyer-packs")
+    : "";
+}
+
+function collectPackMarkers(root, markers) {
   try {
-    const root = path.join(resolveRepoRoot(), "knowledge", "buyers");
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       try {
@@ -122,8 +125,18 @@ function buyerSourceMarkers() {
       }
     }
   } catch {
-    // Missing buyers directory falls through to the default marker.
+    // A missing pack directory falls through to the default marker.
   }
+}
+
+// Folder names proving a OneDrive root belongs to a known buyer, read from the
+// curated packs and the login-provisioned drafts. Falls back to the Talbots
+// marker so a broken knowledge directory cannot disable source detection.
+function buyerSourceMarkers() {
+  const markers = [];
+  collectPackMarkers(path.join(resolveRepoRoot(), "knowledge", "buyers"), markers);
+  const userRoot = resolveUserPacksRoot();
+  if (userRoot) collectPackMarkers(userRoot, markers);
   return markers.length ? [...new Set(markers)] : ["Talbots"];
 }
 
@@ -224,6 +237,9 @@ function runCli(commandArgs, options = {}) {
           PYTHONUTF8: "1",
           ...packagedEnvironment,
           ...(runtimeOptions.buyerId ? { OPENCRAB_BUYER: runtimeOptions.buyerId } : {}),
+          ...(resolveUserPacksRoot()
+            ? { OPENCRAB_BUYER_PACK_USER_DIR: resolveUserPacksRoot() }
+            : {}),
           ...(activeMailContext?.dbPath
             ? { OPENCRAB_MAIL_DB_PATH: activeMailContext.dbPath }
             : {}),

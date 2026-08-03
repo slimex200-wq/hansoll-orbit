@@ -697,6 +697,18 @@ export function AgentView({
               </div>
             ) : null}
             <section className="agent-answer">
+            {result.answer.buyer && result.answer.buyer.playbook !== "talbots" ? (
+              <div className="agent-freshness-warning" role="note">
+                <AlertTriangle size={16} />
+                <div>
+                  <strong>일반 안전 모드</strong>
+                  <span>
+                    이 바이어는 아직 전용 워크플로 팩이 없습니다. 단계별
+                    Submit·Costing 지시는 전용 팩 배포 후 제공됩니다.
+                  </span>
+                </div>
+              </div>
+            ) : null}
               <h2>{result.answer.recommendation.title}</h2>
               <p className="decision-conclusion">
                 {result.answer.recommendation.conclusion}

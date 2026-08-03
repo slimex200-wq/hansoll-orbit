@@ -172,6 +172,13 @@ function createBuyerProfileService(options) {
     };
   };
 
+  // Full stored profile (domains, folder ids) for buyer-pack provisioning.
+  const activeProfile = () => {
+    const profile = config.profiles.find((item) => item.id === config.activeBuyerId) || null;
+    if (!profile) return null;
+    return { ...structuredClone(profile), department: config.department };
+  };
+
   const snapshot = (signals = {}) => {
     const folders = Array.isArray(signals.folders) ? signals.folders : [];
     return {
@@ -229,7 +236,7 @@ function createBuyerProfileService(options) {
     return active();
   };
 
-  return { active, confirm, select, snapshot };
+  return { active, activeProfile, confirm, select, snapshot };
 }
 
 module.exports = {

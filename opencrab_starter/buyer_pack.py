@@ -97,21 +97,61 @@ def _read_pack(root: str, buyer_id: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def pack_roots() -> list[str]:
+    """Pack search roots, highest priority first.
+
+    The curated repository packs win. The user root
+    (``OPENCRAB_BUYER_PACK_USER_DIR``) holds drafts the desktop app provisions
+    automatically when a buyer manager confirms a new buyer — an installed
+    build cannot write into its own resources, so login-time onboarding lands
+    there — and a later curated pack must override such a draft.
+    """
+    roots = [str(buyers_root())]
+    user_root = os.environ.get("OPENCRAB_BUYER_PACK_USER_DIR")
+    if user_root:
+        roots.append(str(Path(user_root)))
+    return roots
+
+
+def _with_defaults(pack: dict[str, Any], roots: list[str]) -> dict[str, Any]:
+    """Fill structural gaps so auto-provisioned drafts stay thin.
+
+    A draft pack written at login time carries identity and markers only;
+    evidence classification rules and the playbook come from the central
+    generic pack so rule improvements reach every draft buyer.
+    """
+    completed = dict(pack)
+    if not completed.get("playbook"):
+        completed["playbook"] = "generic"
+    if not completed.get("source_roles"):
+        generic = next(
+            (found for root in roots if (found := _read_pack(root, GENERIC_BUYER_ID))),
+            _BUILTIN_PACKS[GENERIC_BUYER_ID],
+        )
+        completed["source_roles"] = generic.get("source_roles") or []
+    return completed
+
+
 def load_buyer_pack(buyer_id: str | None = None) -> dict[str, Any]:
     """Load the pack for ``buyer_id`` (default: ``OPENCRAB_BUYER`` env).
 
-    Resolution order: the buyer's own pack → the generic pack with
-    ``fallback=True`` → built-in copies. A buyer other than the default never
-    silently receives the Talbots playbook.
+    Resolution order: the buyer's own pack (curated first, then the
+    user-provisioned draft) → the generic pack with ``fallback=True`` →
+    built-in copies. A buyer other than the default never silently receives
+    the Talbots playbook.
     """
     requested = normalize_buyer_id(buyer_id) or active_buyer_id()
-    root = str(buyers_root())
-    own = _read_pack(root, requested)
-    if own is not None:
-        return {**own, "buyer_id": requested, "fallback": False}
+    roots = pack_roots()
+    for root in roots:
+        own = _read_pack(root, requested)
+        if own is not None:
+            return {**_with_defaults(own, roots), "buyer_id": requested, "fallback": False}
     if requested != DEFAULT_BUYER_ID:
-        generic = _read_pack(root, GENERIC_BUYER_ID) or _BUILTIN_PACKS[GENERIC_BUYER_ID]
-        return {**generic, "buyer_id": requested, "fallback": True}
+        for root in roots:
+            generic = _read_pack(root, GENERIC_BUYER_ID)
+            if generic is not None:
+                return {**generic, "buyer_id": requested, "fallback": True}
+        return {**_BUILTIN_PACKS[GENERIC_BUYER_ID], "buyer_id": requested, "fallback": True}
     return {**_BUILTIN_PACKS[DEFAULT_BUYER_ID], "fallback": False}
 
 
