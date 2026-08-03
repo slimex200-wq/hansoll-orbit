@@ -1,4 +1,15 @@
-# OpenCrab Talbots Workbench
+# HANSOLL ORBIT
+
+HANSOLL ORBIT is the internal work intelligence desktop application for the
+Talbots/MGF workflow. One repository holds two layers:
+
+| Layer | Location | Name in code |
+|---|---|---|
+| Desktop application | `apps/desktop` | npm package `hansoll-orbit-desktop`, appId `com.hansoll.orbit` |
+| Indexing and judgment engine | `opencrab_starter/`, `scripts/` | Python package `opencrab_starter` |
+
+`opencrab_starter` keeps its original name because it is the reusable OpenCrab
+Starter engine; ORBIT is the product built on top of it.
 
 ## Desktop Work Agent
 
@@ -24,8 +35,8 @@ The raw business files still stay outside git in OneDrive. The repository tracks
 For a teammate's first machine setup:
 
 ```powershell
-git clone https://github.com/slimex200-wq/opencrab-Talbots.git
-cd opencrab-Talbots
+git clone https://github.com/slimex200-wq/hansoll-orbit.git
+cd hansoll-orbit
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_team_member.ps1
 ```
 
@@ -41,13 +52,8 @@ See [docs/TEAM_CODEX_SETUP.md](docs/TEAM_CODEX_SETUP.md) for OneDrive path, inde
 
 ## Start A Fresh Codex Chat
 
-Open this project root. This is the fixed path to use for every new Codex chat:
-
-```text
-C:\Users\shjung1\Documents\Codex\2026-05-13\open-crab
-```
-
-Do not open `C:\Users\shjung1\OpenCrab` for Talbots work. That folder is the base OpenCrab repo and does not carry the Park Daeri/Talbots handoff.
+Open the repository root you cloned above. Every new Codex chat must use the same
+checkout; a second copy of the repo does not carry the Talbots handoff files.
 
 Before doing Talbots work, the assistant should read:
 

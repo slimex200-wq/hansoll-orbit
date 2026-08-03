@@ -65,6 +65,14 @@ const WINDOW_CHROME = {
   },
 };
 
+// Every mode that replaces company evidence with synthetic fixtures must be
+// visible in the window title and the renderer badge. Seeding demo work while
+// the UI still looks like production is a business-safety failure, not a test
+// convenience.
+function usesSyntheticData() {
+  return itReviewMode || deterministicTestMode;
+}
+
 function resolveWindowChrome(value) {
   return WINDOW_CHROME[value] || WINDOW_CHROME.light;
 }
@@ -316,7 +324,7 @@ function createWindow() {
     autoHideMenuBar: true,
     backgroundColor: chrome.backgroundColor,
     show: false,
-    title: itReviewMode ? "HANSOLL ORBIT · IT 검토용" : "HANSOLL ORBIT",
+    title: usesSyntheticData() ? "HANSOLL ORBIT · IT 검토용" : "HANSOLL ORBIT",
     ...(process.platform === "win32"
       ? {
           titleBarStyle: "hidden",
@@ -336,6 +344,12 @@ function createWindow() {
   });
   mainWindow.setMenuBarVisibility(false);
 
+  // index.html carries its own <title>, which would otherwise replace the
+  // window title on load and hide the synthetic-data marker from the taskbar.
+  mainWindow.on("page-title-updated", (event) => {
+    event.preventDefault();
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
       void shell.openExternal(url);
@@ -353,7 +367,7 @@ function createWindow() {
     void mainWindow.loadURL(developmentUrl);
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"), {
-      query: itReviewMode ? { mode: "it-review" } : {},
+      query: usesSyntheticData() ? { mode: "it-review" } : {},
     });
   }
 
@@ -833,8 +847,10 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-  itReviewMode = detectItReviewMode(process.resourcesPath);
-  deterministicTestMode = process.env.OPENCRAB_E2E_MODE === "1";
+  itReviewMode = detectItReviewMode(process.resourcesPath, process.env, {
+    allowEnvironmentOverride: !app.isPackaged,
+  });
+  deterministicTestMode = !app.isPackaged && process.env.OPENCRAB_E2E_MODE === "1";
   bridge.configureRuntime({
     itReviewMode: itReviewMode || deterministicTestMode,
     e2eMode: deterministicTestMode,

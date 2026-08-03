@@ -1,5 +1,5 @@
 {
-  "name": "opencrab-work-agent",
+  "name": "hansoll-orbit-desktop",
   "version": "0.2.0",
   "private": true,
   "productName": "HANSOLL ORBIT",
@@ -13,7 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
     "smoke": "node scripts/smoke.mjs",
-    "test": "node --test electron/*.test.cjs",
+    "test": "node --test electron/*.test.cjs scripts/*.test.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "test:e2e:empty": "node scripts/e2e-empty-state.mjs",
     "test:it-review": "node scripts/it-review-smoke.mjs",

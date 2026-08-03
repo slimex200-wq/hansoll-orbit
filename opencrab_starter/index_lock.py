@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,12 +48,36 @@ def _stale_lock(lock_path: Path) -> bool:
         return True
 
 
-def _lock_owner_pid(lock_path: Path) -> int:
+def _lock_payload(lock_path: Path) -> dict:
     try:
         payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        return int(payload.get("pid") or 0)
     except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _lock_owner_pid(lock_path: Path) -> int:
+    try:
+        return int(_lock_payload(lock_path).get("pid") or 0)
+    except (TypeError, ValueError):
         return 0
+
+
+def _lock_token(lock_path: Path) -> str:
+    return str(_lock_payload(lock_path).get("token") or "")
+
+
+def _resolve_wait_seconds(wait_seconds: float | None) -> float:
+    if wait_seconds is not None:
+        return wait_seconds
+    configured = os.environ.get("OPENCRAB_INDEX_LOCK_WAIT_SECONDS")
+    if configured is None:
+        return DEFAULT_WAIT_SECONDS
+    try:
+        return float(configured)
+    except ValueError:
+        # A malformed operator setting must not take the whole CLI down.
+        return DEFAULT_WAIT_SECONDS
 
 
 @contextmanager
@@ -61,12 +86,8 @@ def index_writer_lock(
     *,
     wait_seconds: float | None = None,
 ) -> Iterator[None]:
-    configured_wait = os.environ.get("OPENCRAB_INDEX_LOCK_WAIT_SECONDS")
-    timeout = (
-        float(configured_wait)
-        if wait_seconds is None and configured_wait is not None
-        else DEFAULT_WAIT_SECONDS if wait_seconds is None else wait_seconds
-    )
+    timeout = _resolve_wait_seconds(wait_seconds)
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
     lock_path = db_path.with_suffix(f"{db_path.suffix}.refresh.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + max(0.0, timeout)
@@ -78,6 +99,7 @@ def index_writer_lock(
                 payload = json.dumps(
                     {
                         "pid": os.getpid(),
+                        "token": token,
                         "started_at": datetime.now(UTC).isoformat(),
                     }
                 ).encode("utf-8")
@@ -105,7 +127,12 @@ def index_writer_lock(
     try:
         yield
     finally:
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+        # Only remove the lock this call actually owns. A long refresh can be
+        # declared stale and taken over by another writer; deleting that
+        # writer's lock here would let a third process open the same SQLite
+        # index concurrently.
+        if _lock_token(lock_path) == token:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass

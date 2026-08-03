@@ -203,54 +203,70 @@ function runCli(commandArgs, options = {}) {
     const stdout = [];
     const stderr = [];
     let bytes = 0;
+    let errorBytes = 0;
     const maxBytes = 16 * 1024 * 1024;
+    const maxErrorBytes = 1024 * 1024;
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
 
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error(`OpenCrab command timed out after ${timeoutMs / 1000} seconds.`));
+      finish(() => reject(
+        new Error(`OpenCrab command timed out after ${timeoutMs / 1000} seconds.`),
+      ));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
       bytes += chunk.length;
       if (bytes > maxBytes) {
         child.kill();
-        reject(new Error("OpenCrab command exceeded the response size limit."));
+        finish(() => reject(new Error("OpenCrab command exceeded the response size limit.")));
         return;
       }
       stdout.push(chunk);
     });
 
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+    // A crashing backend can emit unbounded diagnostics; only the tail is ever
+    // surfaced, so keep the buffer capped instead of growing it in the main
+    // process.
+    child.stderr.on("data", (chunk) => {
+      if (errorBytes >= maxErrorBytes) return;
+      errorBytes += chunk.length;
+      stderr.push(chunk);
     });
 
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      const output = Buffer.concat(stdout).toString("utf8");
-      const errorText = Buffer.concat(stderr).toString("utf8").trim();
+    child.once("error", (error) => finish(() => reject(error)));
 
-      if (code !== 0 && options.acceptJsonExit) {
+    child.once("close", (code) => {
+      finish(() => {
+        const output = Buffer.concat(stdout).toString("utf8");
+        const errorText = Buffer.concat(stderr).toString("utf8").trim();
+
+        if (code !== 0 && options.acceptJsonExit) {
+          try {
+            resolve(parseJson(output, commandArgs[0]));
+            return;
+          } catch {
+            // Fall through to the normal command error.
+          }
+        }
+
+        if (code !== 0) {
+          reject(new Error(errorText || output.trim() || `OpenCrab exited with code ${code}.`));
+          return;
+        }
+
         try {
           resolve(parseJson(output, commandArgs[0]));
-          return;
-        } catch {
-          // Fall through to the normal command error.
+        } catch (error) {
+          reject(error);
         }
-      }
-
-      if (code !== 0) {
-        reject(new Error(errorText || output.trim() || `OpenCrab exited with code ${code}.`));
-        return;
-      }
-
-      try {
-        resolve(parseJson(output, commandArgs[0]));
-      } catch (error) {
-        reject(error);
-      }
+      });
     });
   });
 }

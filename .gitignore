@@ -49,12 +49,12 @@ credentials.json
 *.tmp
 *.bak
 
-# Local legacy workbench scripts kept on this machine only.
-# Talbots operating context under AGENTS.md and knowledge/ is intentionally
-# tracked in the private opencrab-Talbots repository.
-/*.py
-/*.mjs
-/*.ps1
+# Local scratch scripts kept on one machine only.
+# Scoped to an explicit `_` prefix: a blanket `/*.py` silently hides every new
+# root-level module, which is how real code goes missing from a release.
+/_*.py
+/_*.mjs
+/_*.ps1
 
 # OS/editor
 .DS_Store

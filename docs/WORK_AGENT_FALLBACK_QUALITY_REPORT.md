@@ -11,6 +11,16 @@
 
 Each case receives a deterministic rubric score and an independent model-judge score. The lower score is final. Any critical unsupported claim fails the case.
 
+## Evaluation Scope
+
+This is a regression gate, not an accuracy benchmark. Read the scores with these limits in mind:
+
+- Case count: 4 fixed queries defined in `scripts/evaluate_work_agent_quality.py`. They cover known guardrails, not the range of real requests.
+- No ground truth: the judge grades reasoning and evidence discipline against the same answer it is given. It cannot confirm that a style, price or submit stage is factually correct.
+- Judge independence is partial: the judge runs on `gpt-5.5`, the same model family used for model-mode synthesis.
+- Not reproducible from a clean checkout: the run needs a populated local index over the OneDrive source root and an authenticated provider CLI. Regenerate with `python scripts/evaluate_work_agent_quality.py --mode deterministic` on a configured workstation.
+- This file is generated output. Edit the evaluator, not the report.
+
 ## Cases
 
 | Case | Deterministic | Model judge | Final | Result |

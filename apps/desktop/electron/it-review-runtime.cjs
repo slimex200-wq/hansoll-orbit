@@ -1,8 +1,16 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-function detectItReviewMode(resourcesPath, environment = process.env) {
-  if (environment.OPENCRAB_IT_REVIEW_MODE === "1") return true;
+// The packaged marker file is the only trustworthy review signal for an
+// installed build. An environment variable must never be able to swap company
+// evidence for synthetic fixtures on a pilot machine, so callers have to opt
+// into the override explicitly (development and automated runs only).
+function detectItReviewMode(
+  resourcesPath,
+  environment = process.env,
+  { allowEnvironmentOverride = true } = {},
+) {
+  if (allowEnvironmentOverride && environment.OPENCRAB_IT_REVIEW_MODE === "1") return true;
   if (!resourcesPath) return false;
   return fs.existsSync(path.join(resourcesPath, "it-review", "review-mode.json"));
 }

@@ -62,6 +62,16 @@ const inspectSuggestionReadability = async (theme) =>
 
 try {
   await window.getByRole("heading", { name: "업무 현황" }).waitFor({ timeout: 120_000 });
+  // Synthetic data must never be indistinguishable from real work. Any mode
+  // that seeds fixtures has to declare itself in the badge and window title.
+  await window.getByText("IT 검토용", { exact: true }).waitFor({ timeout: 30_000 });
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].getTitle(),
+    ),
+    "HANSOLL ORBIT · IT 검토용",
+    "A synthetic-data run must be labelled in the window title.",
+  );
   assert.equal(
     await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isMaximized(),

@@ -3,56 +3,92 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const scriptPath = fileURLToPath(import.meta.url);
+const desktopRoot = path.resolve(path.dirname(scriptPath), "..");
 const repoRoot = path.resolve(desktopRoot, "../..");
-const outputRoot = path.resolve(
-  desktopRoot,
-  process.env.ORBIT_BUILD_OUTPUT || "release/production-build",
-);
 
-const sourceStatus = execFileSync(
-  "git",
-  ["status", "--porcelain", "--untracked-files=all", "--", "apps/desktop"],
-  { cwd: repoRoot, encoding: "utf8" },
-).trim();
-if (sourceStatus) {
-  throw new Error(
-    "Production packaging requires committed ORBIT desktop source. "
-    + "Commit or intentionally restore the listed app changes before release.",
-  );
+export function buildSignatureScript(paths) {
+  // `powershell.exe -Command <string>` does not bind trailing arguments to
+  // `$args`; they are appended to the command text instead. Passing the
+  // installer paths that way leaves `$items` empty, produces no stdout and
+  // makes the whole check fail with a JSON parse error regardless of the real
+  // signature status. The file list therefore has to be embedded in the script.
+  const literals = paths.map((item) => `'${String(item).replace(/'/g, "''")}'`).join(",");
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$items = @(@(${literals}) | ForEach-Object {`,
+    "  $signature = Get-AuthenticodeSignature -LiteralPath $_",
+    "  [pscustomobject]@{ Path = $_; Status = [string]$signature.Status }",
+    "})",
+    "$items | ConvertTo-Json -Compress -Depth 3",
+  ].join("; ");
 }
 
-const executables = fs.existsSync(outputRoot)
-  ? fs.readdirSync(outputRoot)
-    .filter((name) => name.toLowerCase().endsWith(".exe"))
-    .map((name) => path.join(outputRoot, name))
-  : [];
-if (!executables.length) {
-  throw new Error(`No production installer was found in ${outputRoot}.`);
+export function parseSignatureOutput(raw, expectedCount) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    throw new Error("Authenticode verification returned no result.");
+  }
+  const parsed = JSON.parse(text);
+  const signatures = Array.isArray(parsed) ? parsed : [parsed];
+  if (signatures.length !== expectedCount) {
+    throw new Error(
+      `Authenticode verification covered ${signatures.length} of ${expectedCount} installers.`,
+    );
+  }
+  return signatures;
 }
 
-const signatureScript = [
-  "$ErrorActionPreference = 'Stop'",
-  "$items = @($args | ForEach-Object {",
-  "  $signature = Get-AuthenticodeSignature -LiteralPath $_",
-  "  [pscustomobject]@{ Path = $_; Status = [string]$signature.Status }",
-  "})",
-  "$items | ConvertTo-Json -Compress",
-].join("; ");
-const raw = execFileSync(
-  "powershell.exe",
-  ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", signatureScript, ...executables],
-  { encoding: "utf8" },
-).trim();
-const parsed = JSON.parse(raw);
-const signatures = Array.isArray(parsed) ? parsed : [parsed];
-const unsigned = signatures.filter((item) => item.Status !== "Valid");
-if (unsigned.length) {
+export function assertSigned(signatures) {
+  const unsigned = signatures.filter((item) => item.Status !== "Valid");
+  if (!unsigned.length) return signatures;
   throw new Error(
     `Production installer signing failed: ${unsigned
       .map((item) => `${path.basename(item.Path)} (${item.Status})`)
-      .join(", ")}`,
+      .join(", ")}. `
+    + "Set the signing certificate before release: WIN_CSC_LINK and "
+    + "WIN_CSC_KEY_PASSWORD, or win.certificateSubjectName in "
+    + "electron-builder.production.cjs.",
   );
 }
 
-console.log(JSON.stringify({ status: "valid", executables: signatures }, null, 2));
+function main() {
+  const outputRoot = path.resolve(
+    desktopRoot,
+    process.env.ORBIT_BUILD_OUTPUT || "release/production-build",
+  );
+
+  const sourceStatus = execFileSync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all", "--", "apps/desktop"],
+    { cwd: repoRoot, encoding: "utf8" },
+  ).trim();
+  if (sourceStatus) {
+    throw new Error(
+      "Production packaging requires committed ORBIT desktop source. "
+      + "Commit or intentionally restore the listed app changes before release.",
+    );
+  }
+
+  const executables = fs.existsSync(outputRoot)
+    ? fs.readdirSync(outputRoot)
+      .filter((name) => name.toLowerCase().endsWith(".exe"))
+      .map((name) => path.join(outputRoot, name))
+    : [];
+  if (!executables.length) {
+    throw new Error(`No production installer was found in ${outputRoot}.`);
+  }
+
+  const raw = execFileSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", buildSignatureScript(executables)],
+    { encoding: "utf8" },
+  );
+  const signatures = assertSigned(parseSignatureOutput(raw, executables.length));
+
+  console.log(JSON.stringify({ status: "valid", executables: signatures }, null, 2));
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  main();
+}

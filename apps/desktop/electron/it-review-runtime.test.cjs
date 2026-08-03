@@ -23,6 +23,19 @@ test("detects the packaged IT review marker or explicit environment flag", () =>
   assert.equal(detectItReviewMode(null, { OPENCRAB_IT_REVIEW_MODE: "1" }), true);
 });
 
+test("a packaged build ignores the review mode environment flag", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-review-"));
+  const markerDirectory = path.join(root, "it-review");
+  fs.mkdirSync(markerDirectory, { recursive: true });
+  fs.writeFileSync(path.join(markerDirectory, "review-mode.json"), "{}", "utf8");
+  const environment = { OPENCRAB_IT_REVIEW_MODE: "1" };
+  const packaged = { allowEnvironmentOverride: false };
+
+  assert.equal(detectItReviewMode(null, environment, packaged), false);
+  assert.equal(detectItReviewMode(path.join(root, "missing"), environment, packaged), false);
+  assert.equal(detectItReviewMode(root, environment, packaged), true);
+});
+
 test("seeds synthetic review work exactly once", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-review-"));
   const store = createDomainStore(path.join(root, "state.json"));
