@@ -92,10 +92,10 @@ function Get-OutlookContext {
             try {
                 $candidate = $accounts.Item($index)
                 $deliveryStore = $candidate.DeliveryStore
-                if (
-                    $defaultStoreId
-                    -and (Clean-Header $deliveryStore.StoreID) -eq $defaultStoreId
-                ) {
+                # Windows PowerShell cannot start a continuation line with a
+                # binary operator; keep -and at the end of the line.
+                if ($defaultStoreId -and
+                    (Clean-Header $deliveryStore.StoreID) -eq $defaultStoreId) {
                     $account = $candidate
                     $candidate = $null
                     break
