@@ -456,6 +456,16 @@ def run_preflight(
             required_include_tops=("Talbots",),
             required_root=config.source_root,
         ),
+        # The fact index feeds structured season/division/stage evidence. It had
+        # no check at all, so an index frozen months ago simply returned zero
+        # rows and the answer looked thinly sourced for no visible reason.
+        check_sqlite_index(
+            "fact_index",
+            config.fact_db_path,
+            "facts",
+            required=False,
+            max_age_hours=config.max_index_age_hours,
+        ),
         check_layout_specs(config.layout_spec_dir, required=require_indexes),
     ]
     if config.mail_source is not None:

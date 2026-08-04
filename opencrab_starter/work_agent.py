@@ -284,7 +284,7 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     )
     total = sum(counts.values())
 
-    subject = ", ".join(styles) if styles else "요청 업무"
+    subject = _answer_subject(styles, classification, concept_label)
     summary = _build_summary(
         subject=subject,
         concept=concept,
@@ -438,6 +438,33 @@ def _mail_work_label(latest_mail: dict[str, Any], concept: str) -> str:
     if mail_subject:
         return f"{mail_subject[:70]} 요청사항 및 후속 조치"
     return "최신 메일 요청사항 및 후속 조치"
+
+
+def _answer_subject(
+    styles: list[str],
+    classification: dict[str, Any],
+    concept_label: str,
+) -> str:
+    """Name what the answer is about.
+
+    Style numbers win. Without one, fall back to the scope the query actually
+    carried, then to the work type, because a placeholder reads as filler in
+    the middle of a Korean business sentence. Scope and work type are never
+    combined: the sentence templates already supply the work type.
+    """
+    if styles:
+        return ", ".join(styles)
+    scope = [
+        str(value)
+        for value in [
+            *(classification.get("seasons") or [])[:1],
+            *(classification.get("divisions") or [])[:1],
+        ]
+        if str(value or "").strip()
+    ]
+    if scope:
+        return " ".join(scope)
+    return str(concept_label or "").strip() or "요청 업무"
 
 
 def _answer_status(decisions: dict[str, Any]) -> str:
