@@ -4,9 +4,12 @@ import shutil
 import sqlite3
 import unittest
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from opencrab_starter.decision_engine import (
+    _merge_evidence_rows,
+    search_active_wip_hits,
     search_facts,
     search_sketches,
     search_style_hits,
@@ -202,6 +205,86 @@ class EvidenceRankingTests(unittest.TestCase):
 
         self.assertEqual(len(hits), 2)
         self.assertEqual(hits[0]["source"], "path")
+
+    def test_style_number_hits_carry_a_score_and_spread_across_files(self) -> None:
+        rows = [
+            (
+                "271900010",
+                "Talbots/WIP/MGF WIP SPR27 FRONT LINE.xlsx",
+                f"WIP!R{index}",
+                "271900010 pending",
+                "cell",
+                "2026-08-03T09:00:00+00:00",
+            )
+            for index in range(6)
+        ]
+        rows.append(
+            (
+                "271900010",
+                "Talbots/Submit form/SP27 Submit Form.xlsx",
+                "Sheet1!A1",
+                "271900010 submit",
+                "cell",
+                "2026-01-01T09:00:00+00:00",
+            )
+        )
+        db_path = self._style_db(rows)
+
+        hits = search_style_hits(db_path, ["271900010"], "271900010", [], limit=4)
+
+        paths = [hit["relative_path"] for hit in hits]
+        self.assertTrue(all(hit["score"] > 0 for hit in hits))
+        self.assertEqual(all(hit["matched_terms"] == ["271900010"] for hit in hits), True)
+        self.assertEqual(paths[:3].count("Talbots/WIP/MGF WIP SPR27 FRONT LINE.xlsx"), 2)
+        self.assertIn("Talbots/Submit form/SP27 Submit Form.xlsx", paths[:3])
+
+    def test_active_wip_hits_carry_a_score_and_spread_across_files(self) -> None:
+        today = datetime.now(UTC).date().isoformat()
+        rows = [
+            (
+                "",
+                "Talbots/WIP/MGF WIP SPR27 FRONT LINE.xlsx",
+                f"WIP!R{index}",
+                f"27190001{index} | {today} | pending",
+                "cell",
+                "2026-08-03T09:00:00+00:00",
+            )
+            for index in range(6)
+        ]
+        rows.append(
+            (
+                "",
+                "Talbots/WIP/MGF WIP HOL26 FRONT LINE.xlsx",
+                "WIP!R1",
+                f"272013168 | {today} | pending",
+                "cell",
+                "2026-08-03T09:00:00+00:00",
+            )
+        )
+        db_path = self._style_db(rows)
+
+        hits = search_active_wip_hits(db_path, limit=4)
+
+        paths = [hit["relative_path"] for hit in hits]
+        self.assertTrue(all(hit["score"] > 0 for hit in hits))
+        self.assertEqual(paths[:3].count("Talbots/WIP/MGF WIP SPR27 FRONT LINE.xlsx"), 2)
+        self.assertIn("Talbots/WIP/MGF WIP HOL26 FRONT LINE.xlsx", paths[:3])
+
+    def test_merge_reapplies_the_per_file_cap(self) -> None:
+        def row(path: str, location: str) -> dict[str, object]:
+            return {"style_no": "", "relative_path": path, "location": location}
+
+        primary = [row("A.xlsx", "R1"), row("A.xlsx", "R2")]
+        secondary = [
+            row("A.xlsx", "R3"),
+            row("A.xlsx", "R4"),
+            row("B.xlsx", "R1"),
+        ]
+
+        merged = _merge_evidence_rows(primary, secondary, limit=3)
+
+        paths = [item["relative_path"] for item in merged]
+        self.assertEqual(paths, ["A.xlsx", "A.xlsx", "B.xlsx"])
 
     def test_facts_rank_by_term_coverage(self) -> None:
         db_path = self.root / "facts.sqlite"

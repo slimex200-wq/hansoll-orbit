@@ -533,9 +533,9 @@ def _merge_evidence_rows(
             continue
         seen.add(key)
         merged.append(row)
-        if len(merged) >= limit:
-            break
-    return merged
+    # The per-file cap has to be re-applied here: two already-capped lists can
+    # still contribute the same workbook and refill every slot after merging.
+    return _spread_across_files(merged, limit=limit)
 
 
 def build_decisions(
@@ -734,6 +734,9 @@ BOTH_FIELD_BONUS = 1
 COVERAGE_BONUS = 4
 FULL_QUERY_BONUS = 12
 RELEVANCE_FLOOR_RATIO = 0.35
+EXACT_STYLE_SCORE = 20
+PATH_SOURCE_BONUS = 6
+ACTIVE_WIP_BASE_SCORE = 30
 ASCII_TERM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9/._'-]*$")
 
 
@@ -851,6 +854,31 @@ def _spread_across_files(
     return [*primary, *overflow][:limit]
 
 
+def _annotate_exact_matches(
+    rows: list[sqlite3.Row], *, styles: list[str], limit: int
+) -> list[dict[str, Any]]:
+    """Score and diversify exact style-number hits.
+
+    Exact matches skip term ranking, but they still need a comparable score so
+    the prompt never sees a mix of scored and unscored evidence, and they still
+    need the per-file cap because one workbook holds many matching cells.
+    """
+    wanted = {str(style) for style in styles}
+    annotated: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        score = EXACT_STYLE_SCORE
+        if str(item.get("source") or "") == "path":
+            score += PATH_SOURCE_BONUS
+        item["score"] = score
+        style_no = str(item.get("style_no") or "")
+        item["matched_terms"] = [style_no] if style_no in wanted else []
+        annotated.append(item)
+    # Stable sort preserves the SQL path-source and recency order within a tier.
+    annotated.sort(key=lambda item: item["score"], reverse=True)
+    return _spread_across_files(annotated, limit=limit)
+
+
 def search_style_hits(
     db_path: Path,
     styles: list[str],
@@ -875,7 +903,7 @@ def search_style_hits(
                     relative_path
                 limit ?
             """
-            rows = con.execute(sql, [*styles, limit]).fetchall()
+            rows = con.execute(sql, [*styles, _candidate_limit(limit)]).fetchall()
         else:
             likes = _search_likes([query, *terms])
             if not likes:
@@ -901,7 +929,10 @@ def search_style_hits(
                 limit=limit,
             )
             return [_row_dict(row, max_preview=300) for row in ranked]
-        return [_row_dict(row, max_preview=300) for row in rows]
+        return [
+            _row_dict(row, max_preview=300)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 
@@ -923,7 +954,13 @@ def search_active_wip_hits(db_path: Path, *, limit: int) -> list[dict[str, Any]]
         ).fetchall()
         hits = [_row_dict(row, max_preview=300) for row in rows]
         hits.sort(key=_active_wip_sort_key)
-        return hits[:limit]
+        for hit in hits:
+            distance = _active_wip_sort_key(hit)[0]
+            hit["score"] = max(
+                1, ACTIVE_WIP_BASE_SCORE - min(distance, ACTIVE_WIP_BASE_SCORE - 1)
+            )
+            hit["matched_terms"] = ["active wip"]
+        return _spread_across_files(hits, limit=limit)
     finally:
         con.close()
 
@@ -972,7 +1009,7 @@ def search_facts(
                 order by updated_at desc, relative_path, row_no
                 limit ?
                 """,
-                [*styles, limit],
+                [*styles, _candidate_limit(limit)],
             ).fetchall()
         else:
             likes = _search_likes([query, *terms])
@@ -1001,7 +1038,10 @@ def search_facts(
                 limit=limit,
             )
             return [_row_dict(row, max_preview=360) for row in ranked]
-        return [_row_dict(row, max_preview=360) for row in rows]
+        return [
+            _row_dict(row, max_preview=360)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 
@@ -1029,7 +1069,7 @@ def search_sketches(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*styles, limit],
+                [*styles, _candidate_limit(limit)],
             ).fetchall()
         else:
             likes = _search_likes([query, *terms])
@@ -1057,7 +1097,10 @@ def search_sketches(
                 limit=limit,
             )
             return [_row_dict(row, max_preview=260) for row in ranked]
-        return [_row_dict(row, max_preview=260) for row in rows]
+        return [
+            _row_dict(row, max_preview=260)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 
