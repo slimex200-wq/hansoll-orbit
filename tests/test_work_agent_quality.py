@@ -4,6 +4,7 @@ import unittest
 
 from scripts.evaluate_work_agent_quality import (
     MAX_CONCLUSION_CHARS,
+    _retrieval_relevance,
     MAX_INSTRUCTION_CHARS,
     QualityCase,
     _normalized_judge_score,
@@ -128,6 +129,51 @@ class WorkAgentQualityTests(unittest.TestCase):
         )
 
         self.assertEqual(score, 80)
+
+
+
+class RetrievalRelevanceTests(unittest.TestCase):
+    def _case(self) -> QualityCase:
+        return QualityCase(
+            case_id="term_search",
+            query="SP27 아울렛 코스팅 현황",
+            required_terms=("SP", "Costing"),
+            expect_retrieval_terms=("sp27",),
+        )
+
+    def test_sources_matching_the_query_term_score_full(self) -> None:
+        result = _retrieval_relevance(
+            self._case(),
+            [
+                {"kind": "file", "relative_path": "a.xlsx", "matched_terms": ["sp27"]},
+                {"kind": "file", "relative_path": "b.xlsx", "matched_terms": ["sp27"]},
+            ],
+        )
+
+        self.assertEqual(result["score"], 10)
+
+    def test_sources_matching_nothing_score_only_the_diversity_point(self) -> None:
+        # A confident sentence written over unrelated rows used to score the
+        # same as one written over the right ones.
+        result = _retrieval_relevance(
+            self._case(),
+            [
+                {"kind": "file", "relative_path": "a.xlsx", "matched_terms": ["ho26"]},
+                {"kind": "file", "relative_path": "b.xlsx", "matched_terms": []},
+            ],
+        )
+
+        self.assertEqual(result["score"], 3)
+
+    def test_term_search_case_with_no_file_source_fails_outright(self) -> None:
+        result = _retrieval_relevance(self._case(), [{"kind": "mail", "title": "x"}])
+
+        self.assertEqual(result["score"], 0)
+
+    def test_style_number_cases_are_not_penalised(self) -> None:
+        case = QualityCase(case_id="style", query="271900010", required_terms=("271900010",))
+
+        self.assertEqual(_retrieval_relevance(case, [])["score"], 10)
 
 
 if __name__ == "__main__":

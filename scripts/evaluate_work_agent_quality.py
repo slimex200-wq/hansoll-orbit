@@ -25,6 +25,10 @@ class QualityCase:
     expected_deliverable_states: tuple[str, ...] = ()
     require_confirmation: bool = False
     expect_no_evidence: bool = False
+    # Terms the retrieved sources themselves must match, not just the answer
+    # text. Set for cases that go through term search, where a plausible answer
+    # can be written over completely unrelated rows.
+    expect_retrieval_terms: tuple[str, ...] = ()
 
 
 CASES = (
@@ -59,6 +63,20 @@ CASES = (
         require_confirmation=True,
         expect_no_evidence=True,
     ),
+    # Every case above pins one style number or expects zero evidence, so none
+    # of them reach term search — the branch where retrieval actually drifted.
+    QualityCase(
+        case_id="season_division_portfolio",
+        query="SP27 아울렛 코스팅 현황",
+        required_terms=("SP", "27", "Costing", "OUTLET"),
+        expect_retrieval_terms=("sp27",),
+    ),
+    QualityCase(
+        case_id="current_week_delays",
+        query="이번 주 GAC 지연 스타일 정리",
+        required_terms=("GAC", "지연", "WIP"),
+        expect_retrieval_terms=("gac", "delay", "late"),
+    ),
 )
 
 # Korean operator answers are graded for concision as well as substance. Without
@@ -72,6 +90,10 @@ MIN_INSTRUCTION_CHARS = 20
 MAX_INSTRUCTION_CHARS = 220
 MIN_COMPLETION_CHARS = 8
 MAX_COMPLETION_CHARS = 120
+
+# model_execution 10 + decision_quality 20 + evidence_use 20 + actionability 25
+# + safety 15 + artifact_decision 10 + retrieval_relevance 10
+DETERMINISTIC_POINTS = 110
 
 
 def main() -> int:
@@ -247,6 +269,8 @@ def score_answer(
         and sum(int(value or 0) for value in counts.values()) == 0
     ):
         evidence_score += 8
+    retrieval = _retrieval_relevance(case, answer.get("findings") or [])
+    checks["retrieval_relevance"] = retrieval["score"]
     checks["evidence_use"] = min(20, evidence_score)
 
     actionability = 0
@@ -308,9 +332,47 @@ def score_answer(
         )
         artifact = round(10 * matched / len(case.expected_deliverables))
     checks["artifact_decision"] = artifact
-    checks["score"] = sum(checks.values())
+    # retrieval_relevance adds a sixth dimension, so the raw total is 110.
+    # Normalise back to 100 or --minimum would silently become easier to clear.
+    checks["score"] = round(100 * sum(checks.values()) / DETERMINISTIC_POINTS)
     checks["matched_terms"] = matched_terms
+    checks["retrieval_detail"] = retrieval["detail"]
     return checks
+
+
+def _retrieval_relevance(
+    case: QualityCase, findings: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Score the sources themselves, not the sentence written over them.
+
+    Keyword checks on answer text cannot separate a correct source from a
+    plausible sentence written over an unrelated one. Term-search cases carry
+    the terms the retrieved rows must actually match.
+    """
+    if not case.expect_retrieval_terms:
+        return {"score": 10, "detail": "not a term-search case"}
+    files = [item for item in findings if item.get("kind") == "file"]
+    if not files:
+        return {"score": 0, "detail": "term-search case returned no file sources"}
+    wanted = {term.casefold() for term in case.expect_retrieval_terms}
+    covered = sum(
+        1
+        for item in files
+        if {str(term).casefold() for term in item.get("matched_terms") or []} & wanted
+    )
+    sources = {
+        str(item.get("relative_path") or item.get("title") or "") for item in files
+    }
+    score = round(7 * covered / len(files))
+    if len(sources) > 1:
+        score += 3
+    return {
+        "score": min(10, score),
+        "detail": (
+            f"{covered}/{len(files)} sources matched a query term "
+            f"across {len(sources)} files"
+        ),
+    }
 
 
 def run_quality_judge(results: list[dict[str, Any]]) -> dict[str, Any]:
