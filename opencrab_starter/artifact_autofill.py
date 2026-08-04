@@ -252,7 +252,7 @@ def build_records(source_data: dict[str, Any]) -> tuple[list[dict[str, Any]], li
         extracted = _extract_mapping(mapping)
         styles = _styles_from_value(extracted.get("style"))
         if not styles:
-            styles = _styles_from_value(mapping)
+            styles = _styles_from_value(_without_paths(mapping))
         for value in _path_values(mapping):
             if value not in source_paths:
                 source_paths.append(value)
@@ -320,7 +320,7 @@ def _extract_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
         if canonical and not _blank(value):
             extracted.setdefault(canonical, _display_value(value))
     if "style" not in extracted:
-        styles = _styles_from_value(mapping)
+        styles = _styles_from_value(_without_paths(mapping))
         if styles:
             extracted["style"] = styles
     return extracted
@@ -383,6 +383,42 @@ def _path_values(value: Any) -> Iterable[str]:
     elif isinstance(value, (list, tuple)):
         for child in value:
             yield from _path_values(child)
+
+
+def _without_paths(value: Any) -> Any:
+    """Strip file paths before free-text style scanning.
+
+    ``STYLE_PATTERN`` accepts any nine consecutive digits, so a folder name,
+    hash or export filename that happens to contain nine digits would be read
+    as a business style. That invents a record, fills an extra row and repeats
+    the sketch image in a customer-facing workbook.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _without_paths(child)
+            for key, child in value.items()
+            if not _is_path_like(key, child)
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _without_paths(child)
+            for child in value
+            if not _is_path_like("", child)
+        ]
+    return value
+
+
+def _is_path_like(key: Any, value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    if "path" in str(key).lower():
+        return True
+    candidate = value.strip()
+    if not candidate:
+        return False
+    if Path(candidate).suffix.lower() in IMAGE_SUFFIXES:
+        return True
+    return bool(re.match(r"^[A-Za-z]:[\\/]", candidate)) or candidate.startswith("\\\\")
 
 
 def _display_value(value: Any) -> Any:
