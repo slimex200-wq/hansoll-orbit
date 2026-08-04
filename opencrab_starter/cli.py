@@ -42,7 +42,6 @@ def main() -> None:
     style_refresh_parser.add_argument("--path-contains", action="append")
     style_refresh_parser.add_argument("--force", action="store_true")
     style_refresh_parser.add_argument("--reset", action="store_true")
-    style_refresh_parser.add_argument("--with-fts", action="store_true")
     style_refresh_parser.add_argument("--max-hits-per-style-file", type=int, default=3)
     style_refresh_parser.add_argument("--progress-every", type=int, default=250)
     style_refresh_parser.add_argument("--style-db")
@@ -274,7 +273,6 @@ def main() -> None:
             path_contains=args.path_contains,
             force=args.force,
             reset=args.reset,
-            with_fts=args.with_fts,
             max_hits_per_style_file=args.max_hits_per_style_file,
             progress_every=args.progress_every,
         )
