@@ -9,6 +9,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from PIL import Image
 
+from opencrab_starter.artifact_autofill import build_records
 from opencrab_starter.workbook_prepare import (
     prepare_artifact_workbook,
     prepare_dispatch_workbook,
@@ -189,6 +190,70 @@ class WorkbookPrepareTests(unittest.TestCase):
             workbook.close()
         self.assertEqual(result["fill_summary"]["inserted_images"], 1)
         self.assertTrue(all(item["ok"] for item in validate_prepared_artifact(output, "ceo_recap")))
+
+    def test_nine_digit_run_in_a_file_path_is_not_read_as_a_style(self) -> None:
+        # A folder name, hash or export filename can hold nine consecutive
+        # digits. Treating it as a style invented a second record, filled an
+        # extra row and repeated the sketch image in the delivered workbook.
+        photo_dir = self.root / "cec54c554882401ca68c051cfd31b17b"
+        photo_dir.mkdir()
+        photo = photo_dir / "tp-photo.png"
+        Image.new("RGB", (80, 80), "white").save(photo)
+        source = self.root / "ceo-path.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "APR TXT"
+        headers = [
+            "Outlet Style #",
+            "TP Photos",
+            "Style Description",
+            "Fabric Information",
+            "Colors",
+            "Projection",
+            "MOQ/MCQ",
+            "SY",
+            "CEO",
+        ]
+        for column, value in enumerate(headers, start=1):
+            sheet.cell(row=1, column=column, value=value)
+        workbook.save(source)
+        workbook.close()
+
+        output = self.root / "ceo-path-filled.xlsx"
+        result = prepare_artifact_workbook(
+            source,
+            output,
+            "ceo_recap",
+            {
+                "caseTitle": "SP27 OUTLET APR CEO Recap 271952230",
+                "businessKeys": [{"kind": "style", "value": "271952230"}],
+                "evidence": [{
+                    "style_no": "271952230",
+                    "style_description": "25 IN SS CREW",
+                    "image_path": str(photo),
+                }],
+            },
+        )
+
+        self.assertEqual(result["fill_summary"]["styles"], ["271952230"])
+        self.assertEqual(result["fill_summary"]["inserted_images"], 1)
+        workbook = load_workbook(output)
+        try:
+            sheet = workbook["APR TXT"]
+            self.assertEqual(len(sheet._images), 1)
+            self.assertIsNone(sheet["A3"].value)
+        finally:
+            workbook.close()
+
+    def test_style_number_still_read_from_non_path_free_text(self) -> None:
+        records, _ = build_records(
+            {"evidence": [{"note": "Recap for 271952230 and 272013168"}]}
+        )
+
+        self.assertEqual(
+            [record["style"] for record in records],
+            ["271952230", "272013168"],
+        )
 
     def test_costing_sheet_uses_tbd_for_missing_required_values(self) -> None:
         source = self.root / "costing-source.xlsx"
