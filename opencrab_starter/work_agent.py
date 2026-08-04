@@ -936,6 +936,11 @@ def _build_findings(
                 "snippet": str(item.get("snippet") or item.get("raw_compact") or "")[:500],
                 "relative_path": relative_path,
                 "indexed_at": item.get("indexed_at"),
+                # Why this source was picked, so the answer, the UI cards and
+                # the quality gate can all check relevance instead of trusting
+                # that anything returned by search belongs here.
+                "score": item.get("score"),
+                "matched_terms": list(item.get("matched_terms") or []),
             }
         )
         if len([finding for finding in findings if finding["kind"] == "file"]) >= 5:
