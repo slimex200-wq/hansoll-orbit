@@ -533,9 +533,9 @@ def _merge_evidence_rows(
             continue
         seen.add(key)
         merged.append(row)
-        if len(merged) >= limit:
-            break
-    return merged
+    # The per-file cap has to be re-applied here: two already-capped lists can
+    # still contribute the same workbook and refill every slot after merging.
+    return _spread_across_files(merged, limit=limit)
 
 
 def build_decisions(
@@ -701,6 +701,184 @@ def match_project_rules(
     }
 
 
+STYLE_PATH_FIELDS = ("relative_path",)
+STYLE_TEXT_FIELDS = ("style_no", "location", "snippet")
+FACT_PATH_FIELDS = ("relative_path",)
+FACT_TEXT_FIELDS = (
+    "style_no",
+    "season",
+    "division",
+    "form_type",
+    "fact_type",
+    "color_name",
+    "quality_code",
+    "fabric_ref",
+    "stage",
+    "status",
+    "vendor",
+    "department",
+    "description",
+    "raw_compact",
+    "sheet_name",
+)
+SKETCH_PATH_FIELDS = ("relative_path",)
+SKETCH_TEXT_FIELDS = ("style_no", "location", "nearby_text")
+
+MAX_CANDIDATE_ROWS = 1_500
+MAX_ROWS_PER_FILE = 2
+PATH_TERM_WEIGHT = 6
+TEXT_TERM_WEIGHT = 3
+# Discount hard enough that a mid-word path hit never ties a whole-word body hit.
+PARTIAL_WORD_DIVISOR = 3
+BOTH_FIELD_BONUS = 1
+COVERAGE_BONUS = 4
+FULL_QUERY_BONUS = 12
+RELEVANCE_FLOOR_RATIO = 0.35
+EXACT_STYLE_SCORE = 20
+PATH_SOURCE_BONUS = 6
+ACTIVE_WIP_BASE_SCORE = 30
+ASCII_TERM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9/._'-]*$")
+
+
+def _candidate_limit(limit: int) -> int:
+    """Over-fetch before ranking so SQL recency order never decides relevance."""
+    return min(MAX_CANDIDATE_ROWS, max(limit * 20, 200))
+
+
+def _relevance_score(
+    row: dict[str, Any],
+    *,
+    query: str,
+    terms: list[str],
+    path_fields: tuple[str, ...],
+    text_fields: tuple[str, ...],
+) -> tuple[int, list[str]]:
+    path_text = " ".join(_clean(row.get(field)) for field in path_fields).casefold()
+    body_text = " ".join(_clean(row.get(field)) for field in text_fields).casefold()
+    matched: list[str] = []
+    score = 0
+    for term in terms:
+        needle = _clean(term).casefold()
+        if len(needle) < 3 or needle in {item.casefold() for item in matched}:
+            continue
+        path_weight = _field_weight(needle, path_text, PATH_TERM_WEIGHT)
+        body_weight = _field_weight(needle, body_text, TEXT_TERM_WEIGHT)
+        if not path_weight and not body_weight:
+            continue
+        matched.append(term)
+        score += max(path_weight, body_weight)
+        if path_weight and body_weight:
+            score += BOTH_FIELD_BONUS
+    if len(matched) > 1:
+        score += COVERAGE_BONUS * (len(matched) - 1)
+    normalized_query = _clean(query).casefold()
+    if normalized_query and (
+        normalized_query in path_text or normalized_query in body_text
+    ):
+        score += FULL_QUERY_BONUS
+    return score, matched
+
+
+def _rank_by_relevance(
+    rows: list[sqlite3.Row],
+    *,
+    query: str,
+    terms: list[str],
+    path_fields: tuple[str, ...],
+    text_fields: tuple[str, ...],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Rank term-search candidates by term coverage, then drop weak outliers.
+
+    SQL only proves that a row matched at least one LIKE pattern. Without this
+    step a row matching one generic term outranks a row matching every term
+    whenever it was indexed more recently.
+    """
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        score, matched = _relevance_score(
+            item,
+            query=query,
+            terms=terms,
+            path_fields=path_fields,
+            text_fields=text_fields,
+        )
+        item["score"] = score
+        item["matched_terms"] = matched
+        scored.append(item)
+    # Stable sort keeps the SQL recency order inside equal-relevance groups.
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    if not scored:
+        return []
+    floor = scored[0]["score"] * RELEVANCE_FLOOR_RATIO
+    kept = [item for item in scored if item["score"] >= floor] or scored[:1]
+    return _spread_across_files(kept, limit=limit)
+
+
+def _field_weight(needle: str, haystack: str, full_weight: int) -> int:
+    """Score one term against one field, discounting mid-word substring hits.
+
+    ``late`` inside ``Latest Care Label`` is not a delay signal. Korean terms
+    have no reliable ASCII word boundary, so only ASCII terms are discounted.
+    """
+    if needle not in haystack:
+        return 0
+    if not ASCII_TERM_PATTERN.fullmatch(needle):
+        return full_weight
+    boundary = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])")
+    if boundary.search(haystack):
+        return full_weight
+    return max(1, full_weight // PARTIAL_WORD_DIVISOR)
+
+
+def _spread_across_files(
+    rows: list[dict[str, Any]], *, limit: int
+) -> list[dict[str, Any]]:
+    """Cap rows per source file so one workbook cannot fill the whole answer.
+
+    Style and fact indexes store one row per matching cell, so a single
+    workbook easily supplies every slot and the answer looks like eight
+    sources when it has one.
+    """
+    per_file: Counter[str] = Counter()
+    primary: list[dict[str, Any]] = []
+    overflow: list[dict[str, Any]] = []
+    for row in rows:
+        key = str(row.get("relative_path") or row.get("source_path") or "")
+        if per_file[key] < MAX_ROWS_PER_FILE:
+            per_file[key] += 1
+            primary.append(row)
+        else:
+            overflow.append(row)
+    return [*primary, *overflow][:limit]
+
+
+def _annotate_exact_matches(
+    rows: list[sqlite3.Row], *, styles: list[str], limit: int
+) -> list[dict[str, Any]]:
+    """Score and diversify exact style-number hits.
+
+    Exact matches skip term ranking, but they still need a comparable score so
+    the prompt never sees a mix of scored and unscored evidence, and they still
+    need the per-file cap because one workbook holds many matching cells.
+    """
+    wanted = {str(style) for style in styles}
+    annotated: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        score = EXACT_STYLE_SCORE
+        if str(item.get("source") or "") == "path":
+            score += PATH_SOURCE_BONUS
+        item["score"] = score
+        style_no = str(item.get("style_no") or "")
+        item["matched_terms"] = [style_no] if style_no in wanted else []
+        annotated.append(item)
+    # Stable sort preserves the SQL path-source and recency order within a tier.
+    annotated.sort(key=lambda item: item["score"], reverse=True)
+    return _spread_across_files(annotated, limit=limit)
+
+
 def search_style_hits(
     db_path: Path,
     styles: list[str],
@@ -725,7 +903,7 @@ def search_style_hits(
                     relative_path
                 limit ?
             """
-            rows = con.execute(sql, [*styles, limit]).fetchall()
+            rows = con.execute(sql, [*styles, _candidate_limit(limit)]).fetchall()
         else:
             likes = _search_likes([query, *terms])
             if not likes:
@@ -740,9 +918,21 @@ def search_style_hits(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
-        return [_row_dict(row, max_preview=300) for row in rows]
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=STYLE_PATH_FIELDS,
+                text_fields=STYLE_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=300) for row in ranked]
+        return [
+            _row_dict(row, max_preview=300)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 
@@ -764,7 +954,13 @@ def search_active_wip_hits(db_path: Path, *, limit: int) -> list[dict[str, Any]]
         ).fetchall()
         hits = [_row_dict(row, max_preview=300) for row in rows]
         hits.sort(key=_active_wip_sort_key)
-        return hits[:limit]
+        for hit in hits:
+            distance = _active_wip_sort_key(hit)[0]
+            hit["score"] = max(
+                1, ACTIVE_WIP_BASE_SCORE - min(distance, ACTIVE_WIP_BASE_SCORE - 1)
+            )
+            hit["matched_terms"] = ["active wip"]
+        return _spread_across_files(hits, limit=limit)
     finally:
         con.close()
 
@@ -813,7 +1009,7 @@ def search_facts(
                 order by updated_at desc, relative_path, row_no
                 limit ?
                 """,
-                [*styles, limit],
+                [*styles, _candidate_limit(limit)],
             ).fetchall()
         else:
             likes = _search_likes([query, *terms])
@@ -831,9 +1027,21 @@ def search_facts(
                 order by updated_at desc, relative_path, row_no
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
-        return [_row_dict(row, max_preview=360) for row in rows]
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=FACT_PATH_FIELDS,
+                text_fields=FACT_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=360) for row in ranked]
+        return [
+            _row_dict(row, max_preview=360)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 
@@ -861,7 +1069,7 @@ def search_sketches(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*styles, limit],
+                [*styles, _candidate_limit(limit)],
             ).fetchall()
         else:
             likes = _search_likes([query, *terms])
@@ -878,9 +1086,21 @@ def search_sketches(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
-        return [_row_dict(row, max_preview=260) for row in rows]
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=SKETCH_PATH_FIELDS,
+                text_fields=SKETCH_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=260) for row in ranked]
+        return [
+            _row_dict(row, max_preview=260)
+            for row in _annotate_exact_matches(rows, styles=styles, limit=limit)
+        ]
     finally:
         con.close()
 

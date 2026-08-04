@@ -61,6 +61,18 @@ CASES = (
     ),
 )
 
+# Korean operator answers are graded for concision as well as substance. Without
+# an upper bound the rubric pays for padding, which is exactly what the model
+# judge penalises as 장황함.
+MIN_CONCLUSION_CHARS = 50
+MAX_CONCLUSION_CHARS = 400
+MIN_NEXT_MOVE_CHARS = 20
+MAX_NEXT_MOVE_CHARS = 200
+MIN_INSTRUCTION_CHARS = 20
+MAX_INSTRUCTION_CHARS = 220
+MIN_COMPLETION_CHARS = 8
+MAX_COMPLETION_CHARS = 120
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -210,9 +222,9 @@ def score_answer(
     next_move = str(recommendation.get("next_move") or "")
     if title and (not re.search(r"\d{9}", case.query) or re.search(r"\d{9}", title)):
         decision += 5
-    if len(conclusion) >= 50:
+    if MIN_CONCLUSION_CHARS <= len(conclusion) <= MAX_CONCLUSION_CHARS:
         decision += 5
-    if len(next_move) >= 20:
+    if MIN_NEXT_MOVE_CHARS <= len(next_move) <= MAX_NEXT_MOVE_CHARS:
         decision += 5
     if sum(term.casefold() in joined.casefold() for term in case.required_terms) >= 2:
         decision += 5
@@ -241,8 +253,12 @@ def score_answer(
     if 2 <= len(steps) <= 5:
         actionability += 5
     if steps and all(
-        len(str(step.get("instruction") or "")) >= 20
-        and len(str(step.get("completion_check") or "")) >= 8
+        MIN_INSTRUCTION_CHARS
+        <= len(str(step.get("instruction") or ""))
+        <= MAX_INSTRUCTION_CHARS
+        and MIN_COMPLETION_CHARS
+        <= len(str(step.get("completion_check") or ""))
+        <= MAX_COMPLETION_CHARS
         for step in steps
     ):
         actionability += 8
