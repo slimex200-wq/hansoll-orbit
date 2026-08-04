@@ -701,6 +701,114 @@ def match_project_rules(
     }
 
 
+STYLE_PATH_FIELDS = ("relative_path",)
+STYLE_TEXT_FIELDS = ("style_no", "location", "snippet")
+FACT_PATH_FIELDS = ("relative_path",)
+FACT_TEXT_FIELDS = (
+    "style_no",
+    "season",
+    "division",
+    "form_type",
+    "fact_type",
+    "color_name",
+    "quality_code",
+    "fabric_ref",
+    "stage",
+    "status",
+    "vendor",
+    "department",
+    "description",
+    "raw_compact",
+    "sheet_name",
+)
+SKETCH_PATH_FIELDS = ("relative_path",)
+SKETCH_TEXT_FIELDS = ("style_no", "location", "nearby_text")
+
+MAX_CANDIDATE_ROWS = 1_500
+PATH_TERM_WEIGHT = 6
+TEXT_TERM_WEIGHT = 3
+BOTH_FIELD_BONUS = 1
+COVERAGE_BONUS = 4
+FULL_QUERY_BONUS = 12
+RELEVANCE_FLOOR_RATIO = 0.35
+
+
+def _candidate_limit(limit: int) -> int:
+    """Over-fetch before ranking so SQL recency order never decides relevance."""
+    return min(MAX_CANDIDATE_ROWS, max(limit * 20, 200))
+
+
+def _relevance_score(
+    row: dict[str, Any],
+    *,
+    query: str,
+    terms: list[str],
+    path_fields: tuple[str, ...],
+    text_fields: tuple[str, ...],
+) -> tuple[int, list[str]]:
+    path_text = " ".join(_clean(row.get(field)) for field in path_fields).casefold()
+    body_text = " ".join(_clean(row.get(field)) for field in text_fields).casefold()
+    matched: list[str] = []
+    score = 0
+    for term in terms:
+        needle = _clean(term).casefold()
+        if len(needle) < 3 or needle in {item.casefold() for item in matched}:
+            continue
+        in_path = needle in path_text
+        in_body = needle in body_text
+        if not in_path and not in_body:
+            continue
+        matched.append(term)
+        score += PATH_TERM_WEIGHT if in_path else TEXT_TERM_WEIGHT
+        if in_path and in_body:
+            score += BOTH_FIELD_BONUS
+    if len(matched) > 1:
+        score += COVERAGE_BONUS * (len(matched) - 1)
+    normalized_query = _clean(query).casefold()
+    if normalized_query and (
+        normalized_query in path_text or normalized_query in body_text
+    ):
+        score += FULL_QUERY_BONUS
+    return score, matched
+
+
+def _rank_by_relevance(
+    rows: list[sqlite3.Row],
+    *,
+    query: str,
+    terms: list[str],
+    path_fields: tuple[str, ...],
+    text_fields: tuple[str, ...],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Rank term-search candidates by term coverage, then drop weak outliers.
+
+    SQL only proves that a row matched at least one LIKE pattern. Without this
+    step a row matching one generic term outranks a row matching every term
+    whenever it was indexed more recently.
+    """
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        score, matched = _relevance_score(
+            item,
+            query=query,
+            terms=terms,
+            path_fields=path_fields,
+            text_fields=text_fields,
+        )
+        item["score"] = score
+        item["matched_terms"] = matched
+        scored.append(item)
+    # Stable sort keeps the SQL recency order inside equal-relevance groups.
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    if not scored:
+        return []
+    floor = scored[0]["score"] * RELEVANCE_FLOOR_RATIO
+    kept = [item for item in scored if item["score"] >= floor]
+    return (kept or scored[:1])[:limit]
+
+
 def search_style_hits(
     db_path: Path,
     styles: list[str],
@@ -740,8 +848,17 @@ def search_style_hits(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=STYLE_PATH_FIELDS,
+                text_fields=STYLE_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=300) for row in ranked]
         return [_row_dict(row, max_preview=300) for row in rows]
     finally:
         con.close()
@@ -831,8 +948,17 @@ def search_facts(
                 order by updated_at desc, relative_path, row_no
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=FACT_PATH_FIELDS,
+                text_fields=FACT_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=360) for row in ranked]
         return [_row_dict(row, max_preview=360) for row in rows]
     finally:
         con.close()
@@ -878,8 +1004,17 @@ def search_sketches(
                 order by indexed_at desc, relative_path
                 limit ?
                 """,
-                [*params, limit],
+                [*params, _candidate_limit(limit)],
             ).fetchall()
+            ranked = _rank_by_relevance(
+                rows,
+                query=query,
+                terms=terms,
+                path_fields=SKETCH_PATH_FIELDS,
+                text_fields=SKETCH_TEXT_FIELDS,
+                limit=limit,
+            )
+            return [_row_dict(row, max_preview=260) for row in ranked]
         return [_row_dict(row, max_preview=260) for row in rows]
     finally:
         con.close()
