@@ -725,12 +725,16 @@ SKETCH_PATH_FIELDS = ("relative_path",)
 SKETCH_TEXT_FIELDS = ("style_no", "location", "nearby_text")
 
 MAX_CANDIDATE_ROWS = 1_500
+MAX_ROWS_PER_FILE = 2
 PATH_TERM_WEIGHT = 6
 TEXT_TERM_WEIGHT = 3
+# Discount hard enough that a mid-word path hit never ties a whole-word body hit.
+PARTIAL_WORD_DIVISOR = 3
 BOTH_FIELD_BONUS = 1
 COVERAGE_BONUS = 4
 FULL_QUERY_BONUS = 12
 RELEVANCE_FLOOR_RATIO = 0.35
+ASCII_TERM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9/._'-]*$")
 
 
 def _candidate_limit(limit: int) -> int:
@@ -754,13 +758,13 @@ def _relevance_score(
         needle = _clean(term).casefold()
         if len(needle) < 3 or needle in {item.casefold() for item in matched}:
             continue
-        in_path = needle in path_text
-        in_body = needle in body_text
-        if not in_path and not in_body:
+        path_weight = _field_weight(needle, path_text, PATH_TERM_WEIGHT)
+        body_weight = _field_weight(needle, body_text, TEXT_TERM_WEIGHT)
+        if not path_weight and not body_weight:
             continue
         matched.append(term)
-        score += PATH_TERM_WEIGHT if in_path else TEXT_TERM_WEIGHT
-        if in_path and in_body:
+        score += max(path_weight, body_weight)
+        if path_weight and body_weight:
             score += BOTH_FIELD_BONUS
     if len(matched) > 1:
         score += COVERAGE_BONUS * (len(matched) - 1)
@@ -805,8 +809,46 @@ def _rank_by_relevance(
     if not scored:
         return []
     floor = scored[0]["score"] * RELEVANCE_FLOOR_RATIO
-    kept = [item for item in scored if item["score"] >= floor]
-    return (kept or scored[:1])[:limit]
+    kept = [item for item in scored if item["score"] >= floor] or scored[:1]
+    return _spread_across_files(kept, limit=limit)
+
+
+def _field_weight(needle: str, haystack: str, full_weight: int) -> int:
+    """Score one term against one field, discounting mid-word substring hits.
+
+    ``late`` inside ``Latest Care Label`` is not a delay signal. Korean terms
+    have no reliable ASCII word boundary, so only ASCII terms are discounted.
+    """
+    if needle not in haystack:
+        return 0
+    if not ASCII_TERM_PATTERN.fullmatch(needle):
+        return full_weight
+    boundary = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])")
+    if boundary.search(haystack):
+        return full_weight
+    return max(1, full_weight // PARTIAL_WORD_DIVISOR)
+
+
+def _spread_across_files(
+    rows: list[dict[str, Any]], *, limit: int
+) -> list[dict[str, Any]]:
+    """Cap rows per source file so one workbook cannot fill the whole answer.
+
+    Style and fact indexes store one row per matching cell, so a single
+    workbook easily supplies every slot and the answer looks like eight
+    sources when it has one.
+    """
+    per_file: Counter[str] = Counter()
+    primary: list[dict[str, Any]] = []
+    overflow: list[dict[str, Any]] = []
+    for row in rows:
+        key = str(row.get("relative_path") or row.get("source_path") or "")
+        if per_file[key] < MAX_ROWS_PER_FILE:
+            per_file[key] += 1
+            primary.append(row)
+        else:
+            overflow.append(row)
+    return [*primary, *overflow][:limit]
 
 
 def search_style_hits(

@@ -111,6 +111,71 @@ class EvidenceRankingTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertNotIn("Talbots/Liability/2019 cancel log.xlsx", paths)
 
+    def test_mid_word_substring_ranks_below_a_whole_word_match(self) -> None:
+        db_path = self._style_db(
+            [
+                (
+                    "",
+                    "Talbots/Production/Latest Care Label Layout Confirm/care.xlsx",
+                    "Sheet1!A1",
+                    "care label layout confirm",
+                    "cell",
+                    "2026-08-03T09:00:00+00:00",
+                ),
+                (
+                    "",
+                    "Talbots/WIP/MGF WIP FAL26 FRONT LINE.xlsx",
+                    "WIP!R30",
+                    "shipment is late against GAC",
+                    "cell",
+                    "2026-01-01T09:00:00+00:00",
+                ),
+            ]
+        )
+
+        hits = search_style_hits(db_path, [], "지연 정리", ["late"], limit=5)
+
+        self.assertTrue(hits)
+        self.assertIn("MGF WIP FAL26", hits[0]["relative_path"])
+        self.assertGreater(hits[0]["score"], hits[-1]["score"])
+
+    def test_one_workbook_cannot_fill_every_evidence_slot(self) -> None:
+        rows = [
+            (
+                "",
+                "Talbots/COSTING/SP27/recap.xlsx",
+                f"Sheet1!A{index}",
+                "sp27 costing recap",
+                "cell",
+                "2026-08-03T09:00:00+00:00",
+            )
+            for index in range(6)
+        ]
+        rows.append(
+            (
+                "",
+                "Talbots/COSTING/SP27/TXT/txt recap.xlsx",
+                "Sheet1!A1",
+                "sp27 costing recap",
+                "cell",
+                "2026-01-01T09:00:00+00:00",
+            )
+        )
+        db_path = self._style_db(rows)
+
+        hits = search_style_hits(
+            db_path,
+            [],
+            "SP27 costing",
+            ["sp27", "costing"],
+            limit=4,
+        )
+
+        paths = [hit["relative_path"] for hit in hits]
+        self.assertEqual(len(hits), 4)
+        self.assertEqual(paths[:3].count("Talbots/COSTING/SP27/recap.xlsx"), 2)
+        self.assertIn("Talbots/COSTING/SP27/TXT/txt recap.xlsx", paths[:3])
+
     def test_style_number_query_keeps_path_source_priority(self) -> None:
         db_path = self._style_db(
             [
