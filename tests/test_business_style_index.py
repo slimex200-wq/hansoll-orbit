@@ -16,6 +16,7 @@ from scripts.ingest_business_style_index import (
     StyleHit,
     build_index,
     connect_db,
+    init_db,
     extract_docx,
     find_styles,
     index_writer_lock,
@@ -67,7 +68,6 @@ class BusinessStyleIndexTests(unittest.TestCase):
             path_contains=path_contains,
             force=False,
             reset=False,
-            with_fts=False,
             max_hits_per_style_file=3,
             progress_every=100,
         )
@@ -169,6 +169,30 @@ class BusinessStyleIndexTests(unittest.TestCase):
 
         self.assertEqual(check.status, "pass")
         self.assertEqual(check.evidence["freshness_source"], "ingest_runs.completed_at")
+
+    def test_init_db_drops_a_previously_built_fts_table(self) -> None:
+        # style_hits_fts was maintained but never queried. Existing databases
+        # must shed it instead of paying insert cost forever.
+        with TemporaryDirectory() as temp_dir:
+            db = Path(temp_dir) / "style.sqlite"
+            init_db(db)
+            with closing(connect_db(db, write=True)) as conn, conn:
+                conn.execute(
+                    "CREATE VIRTUAL TABLE style_hits_fts "
+                    "USING fts5(style_no, relative_path, top_folder, location, snippet)"
+                )
+
+            init_db(db)
+
+            with closing(connect_db(db)) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+            self.assertNotIn("style_hits_fts", names)
+            self.assertIn("style_hits", names)
 
 
 if __name__ == "__main__":

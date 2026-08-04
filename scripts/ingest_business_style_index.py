@@ -311,7 +311,7 @@ def extract_hits(path: Path) -> tuple[str, list[StyleHit], str | None]:
         return "error", hits, f"{type(exc).__name__}: {exc}"
 
 
-def init_db(db_path: Path, with_fts: bool) -> None:
+def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with closing(connect_db(db_path, write=True)) as conn, conn:
         conn.execute(
@@ -350,13 +350,12 @@ def init_db(db_path: Path, with_fts: bool) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_style_hits_style ON style_hits(style_no)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_style_hits_path ON style_hits(path)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_top_folder ON files(top_folder)")
-        if with_fts:
-            conn.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS style_hits_fts
-                USING fts5(style_no, relative_path, top_folder, location, snippet)
-                """
-            )
+        # style_hits_fts was built and kept in sync but never queried. Measured
+        # against the live index its bm25 order was worse than term-coverage
+        # ranking, and fts5 AND semantics returned nothing for multi-word
+        # requests like "gac delay late". Drop it so existing databases shed
+        # the dead rows on the next run.
+        conn.execute("DROP TABLE IF EXISTS style_hits_fts")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS ingest_runs (
@@ -403,14 +402,6 @@ def prune_missing_files(
     if not stale_rows:
         return 0
     conn.executemany("DELETE FROM style_hits WHERE path = ?", ((path,) for path, _ in stale_rows))
-    has_fts = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'style_hits_fts'"
-    ).fetchone()
-    if has_fts:
-        conn.executemany(
-            "DELETE FROM style_hits_fts WHERE relative_path = ?",
-            ((relative_path,) for _, relative_path in stale_rows),
-        )
     conn.executemany("DELETE FROM files WHERE path = ?", ((path,) for path, _ in stale_rows))
     return len(stale_rows)
 
@@ -421,7 +412,6 @@ def index_file(
     path: Path,
     indexed_at: str,
     force: bool,
-    with_fts: bool,
     max_hits_per_style_file: int,
 ) -> tuple[int, int, str]:
     relative_path = str(path.relative_to(root))
@@ -448,8 +438,6 @@ def index_file(
     status, hits, error = extract_hits(path)
     hits = cap_hits(hits, max_hits_per_style_file)
     conn.execute("DELETE FROM style_hits WHERE path = ?", (str(path),))
-    if with_fts:
-        conn.execute("DELETE FROM style_hits_fts WHERE relative_path = ?", (relative_path,))
     for hit in hits:
         digest = snippet_hash(hit.snippet)
         conn.execute(
@@ -472,14 +460,6 @@ def index_file(
                 indexed_at,
             ),
         )
-        if with_fts:
-            conn.execute(
-                """
-                INSERT INTO style_hits_fts(style_no, relative_path, top_folder, location, snippet)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (hit.style_no, relative_path, top_folder, hit.location, hit.snippet),
-            )
 
     conn.execute(
         """
@@ -528,7 +508,7 @@ def _build_index_locked(args: argparse.Namespace) -> int:
     include_tops = {item for item in args.include_top if item}
     if args.reset and args.db.exists():
         args.db.unlink()
-    init_db(args.db, args.with_fts)
+    init_db(args.db)
 
     started_at = utc_now()
     run_id = "business-style-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -560,7 +540,6 @@ def _build_index_locked(args: argparse.Namespace) -> int:
                 path,
                 started_at,
                 args.force,
-                args.with_fts,
                 args.max_hits_per_style_file,
             )
             stats["files_indexed"] += indexed
@@ -663,7 +642,6 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--path-contains", action="append")
     build.add_argument("--force", action="store_true")
     build.add_argument("--reset", action="store_true")
-    build.add_argument("--with-fts", action="store_true")
     build.add_argument("--max-hits-per-style-file", type=int, default=3)
     build.add_argument("--progress-every", type=int, default=250)
 
