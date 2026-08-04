@@ -355,7 +355,7 @@ def gather_evidence(
         limit=retrieval_limit,
     )
     facts = search_facts(
-        config.workspace / "data" / "talbots_thin_ontology.sqlite",
+        config.fact_db_path,
         styles,
         query,
         terms,
@@ -437,7 +437,7 @@ def gather_evidence(
             "top_hits": style_hits,
         },
         "fact_index": {
-            "db_path": str(config.workspace / "data" / "talbots_thin_ontology.sqlite"),
+            "db_path": str(config.fact_db_path),
             "hit_count": len(facts),
             "top_hits": facts,
         },

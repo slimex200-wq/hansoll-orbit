@@ -81,7 +81,7 @@ def audit_query(config, query: str, limit: int) -> dict[str, Any]:
         inspect(
             "fact_index",
             search_facts(
-                config.workspace / "data" / "talbots_thin_ontology.sqlite",
+                config.fact_db_path,
                 styles,
                 query,
                 terms,

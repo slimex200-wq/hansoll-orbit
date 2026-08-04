@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from opencrab_starter.work_agent import answer_query, compose_answer
+from opencrab_starter.work_agent import (
+    _answer_subject,
+    answer_query,
+    compose_answer,
+)
 
 
 class WorkAgentAnswerTests(unittest.TestCase):
@@ -584,6 +588,38 @@ class WorkAgentAnswerTests(unittest.TestCase):
                 for item in answer["task_suggestions"]
             )
         )
+
+
+class AnswerSubjectTests(unittest.TestCase):
+    def test_query_scope_replaces_the_placeholder_when_no_style_is_given(self) -> None:
+        subject = _answer_subject(
+            [],
+            {"seasons": ["SP'27"], "divisions": ["OUTLET"]},
+            "Costing",
+        )
+
+        self.assertEqual(subject, "SP'27 OUTLET")
+
+    def test_scope_and_work_type_are_never_combined(self) -> None:
+        # The sentence templates already append the work type, so returning
+        # both produced "SP'27 OUTLET Costing Costing 검토본은".
+        subject = _answer_subject([], {"seasons": ["SP'27"]}, "Costing")
+
+        self.assertNotIn("Costing", subject)
+
+    def test_work_type_is_used_when_the_query_carries_no_scope(self) -> None:
+        subject = _answer_subject([], {"seasons": [], "divisions": []}, "WIP 업데이트")
+
+        self.assertEqual(subject, "WIP 업데이트")
+
+    def test_style_numbers_still_win(self) -> None:
+        subject = _answer_subject(
+            ["271900010"],
+            {"seasons": ["SP'27"], "divisions": ["OUTLET"]},
+            "Costing",
+        )
+
+        self.assertEqual(subject, "271900010")
 
 
 if __name__ == "__main__":

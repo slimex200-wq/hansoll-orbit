@@ -250,7 +250,7 @@ def export_pack(args: argparse.Namespace) -> ExportPaths:
 
     con_style = connect(config.style_db_path)
     con_mail = connect(config.mail_db_path)
-    con_fact = connect(config.workspace / "data" / "talbots_thin_ontology.sqlite")
+    con_fact = connect(config.fact_db_path)
     con_visual = connect(config.visual_db_path)
 
     source_counts = {
