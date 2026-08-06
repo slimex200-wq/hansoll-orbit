@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { MotionConfig } from "motion/react";
 import { Shell } from "./components/Shell";
+import { ViewTransition } from "./components/Motion";
 import { ErrorBanner, LoadingBlock } from "./components/UI";
 import { AdminView } from "./views/AdminView";
 import { AgentView } from "./views/AgentView";
@@ -382,7 +384,8 @@ export default function App() {
   };
 
   return (
-    <Shell
+    <MotionConfig reducedMotion="user">
+      <Shell
       agent={
         <AgentView
           agentStatus={agentStatus}
@@ -404,8 +407,9 @@ export default function App() {
       onGlobalSearch={globalSearch}
       onNavigate={navigate}
       view={view}
-    >
-      {content()}
-    </Shell>
+      >
+        <ViewTransition viewKey={view}>{content()}</ViewTransition>
+      </Shell>
+    </MotionConfig>
   );
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { AlertCircle, Inbox } from "lucide-react";
 import { ThinkingOrb, type OrbState } from "thinking-orbs";
+import { ShimmerText } from "./Motion";
 import type { DomainState } from "../types";
 import { statusLabel } from "../lib";
 
@@ -107,7 +108,7 @@ export function LoadingBlock({
         state={state}
         theme="light"
       />
-      <span>{label}</span>
+      <ShimmerText active>{label}</ShimmerText>
     </div>
   );
 }

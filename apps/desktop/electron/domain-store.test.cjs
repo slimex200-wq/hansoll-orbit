@@ -36,13 +36,13 @@ test("migrates generic evidence titles into work-content titles", () => {
   const store = createDomainStore(statePath);
   const state = store.getState();
 
-  assert.equal(state.schemaVersion, 5);
+  assert.equal(state.schemaVersion, 6);
   assert.equal(
     state.cases[0].title,
     "271900010 · 메일 요청사항 및 후속 조치",
   );
   const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(persisted.schemaVersion, 5);
+  assert.equal(persisted.schemaVersion, 6);
   assert.equal(
     persisted.cases[0].title,
     "271900010 · 메일 요청사항 및 후속 조치",
@@ -623,4 +623,298 @@ test("rejects a child record when neither an existing nor a new work case is pro
   );
   assert.equal(store.getState().cases.length, 0);
   assert.equal(store.getState().tasks.length, 0);
+});
+
+test("migrates legacy state to schema v6 with conservative origins and checksum", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schemaVersion: 5,
+      cases: [{
+        id: "case_legacy",
+        title: "Legacy case",
+        status: "captured",
+        priority: "normal",
+        owner: "Planner",
+        department: "Sales",
+        stage: "Submit",
+        summary: "Manual summary",
+        businessKeys: [{ kind: "style", value: "271900010" }],
+        pendingDecisions: ["Confirm stage"],
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      }],
+      tasks: [{
+        id: "task_legacy",
+        caseId: "case_legacy",
+        title: "Legacy task",
+        status: "todo",
+        owner: "Planner",
+        evidence: ["mail"],
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      }],
+      milestones: [],
+      decisions: [],
+      artifactJobs: [],
+      auditEvents: [],
+    }),
+    "utf8",
+  );
+
+  const store = createDomainStore(statePath);
+  const state = store.getState();
+
+  assert.equal(state.schemaVersion, 6);
+  assert.equal(state.cases[0].fieldOrigins.summary.origin, "legacy");
+  assert.equal(state.tasks[0].fieldOrigins.evidence.origin, "legacy");
+  assert.ok(fs.existsSync(`${statePath}.sha256`));
+  const migrationRecovery = fs.readdirSync(path.join(directory, "recovery"))
+    .find((name) => name.startsWith("pre-migration-") && name.endsWith(".json"));
+  assert.ok(migrationRecovery);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(directory, "recovery", migrationRecovery), "utf8")).schemaVersion,
+    5,
+  );
+  assert.equal(store.getHealth().status, "healthy");
+});
+
+test("invalid primary state is preserved and reported degraded instead of reset healthy", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schemaVersion: 6,
+      cases: [],
+      tasks: [{ id: "task_orphan", caseId: "missing", title: "Orphan", status: "todo", fieldOrigins: {} }],
+      milestones: [],
+      decisions: [],
+      artifactJobs: [],
+      auditEvents: [],
+    }),
+    "utf8",
+  );
+
+  const store = createDomainStore(statePath);
+  const health = store.getHealth();
+
+  assert.equal(health.status, "degraded_empty");
+  assert.equal(store.getState().cases.length, 0);
+  assert.ok(fs.readdirSync(path.join(directory, "recovery")).some((name) => name.startsWith("corrupt-")));
+});
+
+test("checksum mismatch recovers from the newest valid recovery point", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const store = createDomainStore(statePath);
+  const workCase = store.createCase({ title: "Before tamper" });
+  store.updateCase({ id: workCase.id, summary: "Valid recovery point" });
+  fs.writeFileSync(statePath, fs.readFileSync(statePath, "utf8").replace("Valid recovery point", "Tampered"), "utf8");
+
+  const recovered = createDomainStore(statePath);
+
+  assert.equal(recovered.getHealth().status, "degraded_recovered");
+  assert.equal(recovered.getState().cases[0].title, "Before tamper");
+  assert.equal(recovered.getState().cases[0].summary, "");
+});
+
+test("backup bundle validates hashes and restores domain state into a fresh store", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const sourcePath = path.join(directory, "source.json");
+  const targetPath = path.join(directory, "target.json");
+  const source = createDomainStore(sourcePath);
+  source.createCase({ title: "Transfer me", summary: "Small local state" });
+
+  const bundle = source.createBackupBundle({
+    appVersion: "0.2.0",
+    profileKey: "0123456789abcdef01234567",
+    auxEntries: [{ name: "app-preferences", data: { density: "compact" } }],
+  });
+  const target = createDomainStore(targetPath);
+  const restored = target.restoreBackupBundle(bundle);
+
+  assert.equal(restored.ok, true);
+  assert.equal(restored.restartRequired, true);
+  assert.equal(target.getState().cases[0].title, "Transfer me");
+
+  const tampered = JSON.parse(bundle);
+  tampered.entries[0].data.cases[0].title = "Changed";
+  assert.throws(() => target.validateBackupBundle(JSON.stringify(tampered)), /backup_entry_length_mismatch|backup_entry_hash_mismatch|backup_bundle_hash_mismatch/);
+});
+
+test("Agent source refresh preserves manual and legacy protected fields", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const target = store.createCase({
+    title: "Manual title",
+    status: "blocked",
+    priority: "critical",
+    stage: "Submit",
+    summary: "Manual summary",
+    businessKeys: [{ kind: "style", value: "271900010" }],
+    pendingDecisions: ["Confirm color"],
+  });
+
+  const merged = store.createCaseWithTasks({
+    mergeTargetId: target.id,
+    workCase: {
+      title: "Agent title",
+      status: "planned",
+      priority: "low",
+      stage: "submit",
+      summary: "Agent summary",
+      businessKeys: [{ kind: "style", value: "271900010" }],
+      pendingDecisions: ["Confirm ship mode"],
+      evidence: ["new source evidence"],
+    },
+    tasks: [{ title: "New source task", evidence: ["source"] }],
+  });
+
+  assert.equal(merged.workCase.title, "Manual title");
+  assert.equal(merged.workCase.status, "blocked");
+  assert.equal(merged.workCase.priority, "critical");
+  assert.equal(merged.workCase.summary, "Manual summary");
+  assert.deepEqual(merged.workCase.pendingDecisions, ["Confirm color"]);
+  assert.deepEqual(merged.workCase.evidence, ["new source evidence"]);
+  assert.equal(store.getState().tasks[0].fieldOrigins.title.origin, "source");
+});
+
+test("direct mutations cannot spoof reviewed provenance with renderer input", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const workCase = store.createCase({
+    title: "Direct create",
+    fieldOrigin: "agent_reviewed",
+  });
+  assert.equal(workCase.fieldOrigins.title.origin, "manual");
+
+  const updatedCase = store.updateCase({
+    id: workCase.id,
+    summary: "Direct update",
+    fieldOrigin: "agent_reviewed",
+  });
+  assert.equal(updatedCase.fieldOrigins.summary.origin, "manual");
+
+  const task = store.createTask({
+    caseId: workCase.id,
+    title: "Direct task",
+    fieldOrigin: "agent_reviewed",
+  });
+  assert.equal(task.fieldOrigins.title.origin, "manual");
+  const updatedTask = store.updateTask({
+    id: task.id,
+    instruction: "Direct instruction",
+    fieldOrigin: "agent_reviewed",
+  });
+  assert.equal(updatedTask.fieldOrigins.instruction.origin, "manual");
+});
+
+test("artifact generated data keeps manual overrides separate from workflow fields", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const workCase = store.createCase({ title: "Artifact data" });
+  const job = store.createArtifactJob({
+    caseId: workCase.id,
+    title: "Costing",
+    type: "costing_sheet",
+    generatedData: { color: "Blue", outputPath: "ignored.xlsx" },
+    manualOverrides: { color: "Navy", reviewState: "approved" },
+  });
+
+  assert.deepEqual(job.generatedData, { color: "Blue" });
+  assert.deepEqual(job.manualOverrides, { color: "Navy" });
+
+  const updated = store.updateArtifactJob({
+    id: job.id,
+    generatedData: { color: "Red", outputPath: "ignored.xlsx" },
+    manualOverrides: { color: "Black", validationState: "passed" },
+  });
+  assert.deepEqual(updated.generatedData, { color: "Red" });
+  assert.deepEqual(updated.manualOverrides, { color: "Black" });
+  assert.equal(updated.outputPath, "");
+  assert.equal(updated.reviewState, "required");
+  assert.equal(updated.validationState, "not_run");
+});
+
+test("simple mutators roll back in-memory state when persistence fails", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const store = createDomainStore(statePath);
+  const originalRename = fs.renameSync;
+  fs.renameSync = () => {
+    throw new Error("injected_simple_mutator_failure");
+  };
+  try {
+    assert.throws(() => store.createCase({ title: "Must roll back" }), /injected_simple_mutator_failure/);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+  assert.equal(store.getState().cases.length, 0);
+  assert.equal(store.getState().auditEvents.length, 0);
+});
+
+test("automatic recovery point is created at most once per UTC date across restarts", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const first = createDomainStore(statePath);
+  first.createCase({ title: "First" });
+  first.createCase({ title: "Second" });
+  const reloaded = createDomainStore(statePath);
+  reloaded.createCase({ title: "Third" });
+  const today = new Date().toISOString().slice(0, 10);
+  const automatic = fs.readdirSync(path.join(directory, "recovery"))
+    .filter((name) => name.startsWith(`auto-${today}`) && name.endsWith(".json"));
+  assert.equal(automatic.length, 1);
+});
+
+test("automatic recovery never re-blesses checksum-mismatched primary bytes", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const store = createDomainStore(statePath);
+  store.createCase({ title: "Committed" });
+  fs.writeFileSync(
+    statePath,
+    fs.readFileSync(statePath, "utf8").replace("Committed", "Tampered"),
+    "utf8",
+  );
+
+  store.createCase({ title: "Next" });
+  const today = new Date().toISOString().slice(0, 10);
+  const automatic = fs.readdirSync(path.join(directory, "recovery"))
+    .find((name) => name.startsWith(`auto-${today}`) && name.endsWith(".json"));
+  const recoveryState = JSON.parse(fs.readFileSync(path.join(directory, "recovery", automatic), "utf8"));
+  assert.deepEqual(recoveryState.cases.map((item) => item.title), ["Committed"]);
+});
+
+test("backup export redacts legacy audit values and persists restore validation audit", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const sourcePath = path.join(directory, "source.json");
+  const targetPath = path.join(directory, "target.json");
+  const source = createDomainStore(sourcePath);
+  source.createCase({ title: "Safe work" });
+  source.recordAuditEvent({
+    action: "legacy.snapshot",
+    targetType: "artifact",
+    targetId: "legacy",
+    detail: {
+      before: { outputPath: "C:\\Users\\person\\OneDrive - Company\\private.xlsx" },
+      error: "private@example.com",
+    },
+  });
+  const bundle = source.createBackupBundle({ appVersion: "1.2.3", profileKey: "legacy" });
+  assert.equal(bundle.includes("private.xlsx"), false);
+  assert.equal(bundle.includes("private@example.com"), false);
+  assert.deepEqual(
+    JSON.parse(bundle).entries[0].data.auditEvents.find((event) => event.action === "legacy.snapshot").detail,
+    { fields: ["before", "error"] },
+  );
+
+  const target = createDomainStore(targetPath);
+  target.restoreBackupBundle(bundle);
+  const reloaded = createDomainStore(targetPath).getState();
+  assert.ok(reloaded.auditEvents.some((event) => event.action === "restore.validated"));
+  assert.ok(reloaded.auditEvents.some((event) => event.action === "restore.applied"));
 });

@@ -11,11 +11,14 @@ import {
   FileSearch,
   Mail,
   Play,
+  RefreshCw,
   Save,
   Send,
   ShieldCheck,
   X,
 } from "lucide-react";
+import { motion } from "motion/react";
+import { AgentExecutionPulse } from "../components/Motion";
 import { Badge, ErrorBanner, LoadingBlock } from "../components/UI";
 import { extractPath, formatDate, presentError } from "../lib";
 import type {
@@ -448,6 +451,13 @@ export function AgentView({
   };
 
   const status = result ? answerStatus[result.answer.status] : null;
+  const resultHasNoEvidence = Boolean(
+    result
+    && result.answer.counts.style === 0
+    && result.answer.counts.mail === 0
+    && result.answer.counts.fact === 0
+    && result.answer.counts.visual === 0,
+  );
   const runtimeNotice = fallbackNotice(result?.synthesis.fallback_reason);
   const answerUsedFallback = result?.synthesis.mode === "deterministic";
   const displayedEngineReady = agentStatus?.mode === "model_ready" && !answerUsedFallback;
@@ -472,7 +482,7 @@ export function AgentView({
   const latestMailDate = result?.judgment.evidence_summary.mail_index?.latest_received;
 
   return (
-    <div className="agent-panel">
+    <div className={loading ? "agent-panel agent-is-working" : "agent-panel"}>
       <header className="agent-panel-header">
         <div className="agent-panel-title">
           <span className="agent-panel-mark">
@@ -647,16 +657,23 @@ export function AgentView({
         {loading ? (
           <>
             <div className="agent-query-bubble">{submittedQuery}</div>
-            <LoadingBlock
-              label="근거를 확인하고 실행안을 정리하는 중"
-              prominent
-              state="solving"
-            />
+            <div className="agent-motion-loading">
+              <LoadingBlock
+                label="근거를 확인하고 실행안을 정리하는 중"
+                state="solving"
+              />
+              <AgentExecutionPulse />
+            </div>
           </>
         ) : null}
 
         {result ? (
-          <div className="agent-result">
+          <motion.div
+            animate={{ opacity: 1, y: 0 }}
+            className="agent-result"
+            initial={{ opacity: 0, y: 6 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+          >
             <div className="agent-query-bubble">{submittedQuery}</div>
             {answeredFromSavedMail ? (
               <div className="agent-runtime-notice agent-stored-mail-notice" role="status">
@@ -721,9 +738,12 @@ export function AgentView({
                 {result.answer.action_plan.slice(0, 3).map((step) => {
                   const stepState = actionState[step.state];
                   return (
-                    <div
+                    <motion.div
                       className={`action-step action-step-${step.state}`}
+                      initial={{ opacity: 0, x: 5 }}
                       key={`${step.order}-${step.title}`}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: Math.min(step.order - 1, 2) * 0.05, duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                     >
                       <span className="step-order">{step.order}</span>
                       <div className="step-main">
@@ -732,8 +752,15 @@ export function AgentView({
                           <Badge value={stepState.label} tone={stepState.tone} />
                         </div>
                         <p>{step.instruction}</p>
+                        <details className="action-step-check">
+                          <summary>
+                            완료 기준
+                            <ChevronDown size={13} />
+                          </summary>
+                          <span>{step.completion_check}</span>
+                        </details>
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </div>
@@ -755,6 +782,30 @@ export function AgentView({
               <div className="agent-action-blocked" role="status">
                 <AlertTriangle size={16} />
                 <span>{result.contextNotice}</span>
+              </div>
+            ) : null}
+
+            {resultHasNoEvidence ? (
+              <div className="agent-source-recovery" role="status">
+                <FileSearch size={17} />
+                <div>
+                  <strong>원본을 연결하면 오늘 업무를 다시 확정할 수 있습니다.</strong>
+                  <span>근거 없는 회신·제출·승인 업무는 저장하지 않습니다.</span>
+                </div>
+                <div>
+                  <button
+                    className="primary-button"
+                    disabled={mailRefreshing || loading}
+                    onClick={() => void refreshMail()}
+                    type="button"
+                  >
+                    <RefreshCw className={mailRefreshing ? "spin" : ""} size={14} />
+                    {mailRefreshing ? "메일 갱신 중" : "Outlook 메일 갱신"}
+                  </button>
+                  <button className="secondary-button" onClick={onOpenMailSettings} type="button">
+                    연결 설정
+                  </button>
+                </div>
               </div>
             ) : null}
 
@@ -805,10 +856,16 @@ export function AgentView({
                 {actionExecution ? (
                   <div className="agent-action-results" role="status">
                     {actionExecution.results.map((item) => (
-                      <div className={item.status} key={item.id}>
+                      <motion.div
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={item.status}
+                        initial={{ opacity: 0, scale: 0.97 }}
+                        key={item.id}
+                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      >
                         {item.status === "success" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
                         <span>{item.label} · {item.status === "success" ? "완료" : item.status === "cancelled" ? "취소됨" : "실패"}</span>
-                      </div>
+                      </motion.div>
                     ))}
                   </div>
                 ) : (
@@ -848,7 +905,7 @@ export function AgentView({
                   </div>
                   <button
                     className="secondary-button agent-save"
-                    disabled={saving || Boolean(savedCase) || resultMailIsStale || Boolean(result.actionReview)}
+                    disabled={saving || Boolean(savedCase) || resultMailIsStale || resultHasNoEvidence || Boolean(result.actionReview)}
                     onClick={() => void saveCase()}
                     type="button"
                   >
@@ -859,16 +916,19 @@ export function AgentView({
                         : "업무 건 저장됨"
                       : resultMailIsStale
                         ? "메일 갱신 후 저장 가능"
+                        : resultHasNoEvidence
+                          ? "근거 확인 후 저장 가능"
                         : result.actionReview
                           ? "위 실행 검토에서 저장"
                           : "답변과 할 일 저장"}
                   </button>
                 </section>
 
+                {result.answer.action_plan.length > 3 ? (
                 <section className="agent-section">
-                  <h3>전체 실행 지시</h3>
+                  <h3>추가 실행 항목</h3>
                   <div className="agent-full-action-list">
-                    {result.answer.action_plan.map((step) => (
+                    {result.answer.action_plan.slice(3).map((step) => (
                       <div key={`${step.order}-${step.title}`}>
                         <strong>
                           {step.order}. {step.title}
@@ -879,6 +939,7 @@ export function AgentView({
                     ))}
                   </div>
                 </section>
+                ) : null}
 
                 <section className="agent-section">
                   <h3>확인 필요</h3>
@@ -1019,7 +1080,7 @@ export function AgentView({
                 </details>
               </div>
             </details>
-          </div>
+          </motion.div>
         ) : null}
       </div>
 

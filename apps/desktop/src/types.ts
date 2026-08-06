@@ -135,6 +135,22 @@ export interface DomainState {
   auditEvents: AuditEvent[];
 }
 
+export interface LocalStateHealth {
+  status: "healthy" | "degraded_recovered" | "degraded_empty";
+  schemaVersion: number;
+  lastBackupAt: string | null;
+  lastRestoreAt: string | null;
+  recoveryKind: "none" | "automatic" | "pre_restore" | "corrupt_preserved";
+  errorCode: string;
+}
+
+export interface LocalStateBackupResult {
+  status: "created" | "restored" | "cancelled";
+  createdAt?: string;
+  restoredAt?: string;
+  restartRequired?: boolean;
+}
+
 export interface AuditItem {
   name: string;
   status: "pass" | "warn" | "fail";
@@ -595,6 +611,9 @@ export interface DesktopApi {
   selectBuyerContext(buyerId: string): Promise<BuyerContextSnapshot>;
   onBuyerContextChanged(callback: (context: BuyerContextSnapshot) => void): () => void;
   getState(): Promise<DomainState>;
+  getLocalStateHealth(): Promise<LocalStateHealth>;
+  exportLocalStateBackup(): Promise<LocalStateBackupResult>;
+  restoreLocalStateBackup(): Promise<LocalStateBackupResult>;
   createCase(input: Partial<WorkCase>): Promise<WorkCase>;
   createCaseWithTasks(input: {
     workCase: Partial<WorkCase>;

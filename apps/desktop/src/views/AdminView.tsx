@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cloud,
   Database,
+  Download,
   FolderOpen,
   FolderPlus,
   FileStack,
@@ -18,6 +19,7 @@ import {
   Palette,
   Plug,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   ShieldOff,
@@ -26,6 +28,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { Badge, ErrorBanner, LoadingBlock } from "../components/UI";
 import { presentError } from "../lib";
 import type {
@@ -36,6 +39,8 @@ import type {
   BuyerRecommendation,
   BusinessIndexStatus,
   LinkedFolder,
+  LocalStateBackupResult,
+  LocalStateHealth,
   MicrosoftStatus,
   TemplateRegistryItem,
   ThemeMode,
@@ -179,8 +184,57 @@ export function AdminView({
   const [buyerAction, setBuyerAction] = useState("");
   const [folderAction, setFolderAction] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [localStateHealth, setLocalStateHealth] = useState<LocalStateHealth | null>(null);
+  const [dataAction, setDataAction] = useState<"export" | "restore" | null>(null);
+  const [dataNotice, setDataNotice] = useState("");
   const agentLoginPollRef = useRef<number | null>(null);
   const outlookConsentPromptRef = useRef("");
+
+  const refreshLocalStateHealth = async () => {
+    const health = await window.opencrab.getLocalStateHealth();
+    setLocalStateHealth(health);
+    return health;
+  };
+
+  useEffect(() => {
+    let active = true;
+    window.opencrab.getLocalStateHealth().then((health) => {
+      if (active) setLocalStateHealth(health);
+    }).catch((caught) => {
+      if (active) setError(presentError(caught, "로컬 저장 상태를 확인하지 못했습니다."));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const runDataAction = async (
+    kind: "export" | "restore",
+    action: () => Promise<LocalStateBackupResult>,
+  ) => {
+    setDataAction(kind);
+    setDataNotice("");
+    setError("");
+    try {
+      const result = await action();
+      if (result.status === "cancelled") return;
+      await refreshLocalStateHealth();
+      setDataNotice(
+        kind === "export"
+          ? "암호·메일 원문·검색 색인을 제외한 ORBIT 백업을 저장했습니다."
+          : "백업을 검증한 뒤 복원했습니다. 화면을 새로 불러옵니다.",
+      );
+      if (kind === "restore") window.location.reload();
+    } catch (caught) {
+      setError(presentError(
+        caught,
+        kind === "export" ? "백업을 저장하지 못했습니다." : "백업을 복원하지 못했습니다.",
+      ));
+      await refreshLocalStateHealth().catch(() => null);
+    } finally {
+      setDataAction(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -281,6 +335,7 @@ export function AdminView({
       const [nextAudit] = await Promise.all([
         window.opencrab.audit(),
         onAgentRefresh(),
+        refreshLocalStateHealth(),
       ]);
       onAuditChanged(nextAudit);
     } catch (caught) {
@@ -1534,6 +1589,84 @@ export function AdminView({
               description="회사 자료를 찾고 산출물을 만들 때 적용되는 통제 원칙입니다."
               title="데이터 및 권한"
             >
+              <span className="settings-group-label">로컬 상태 및 백업</span>
+              <SettingsGroup>
+                <SettingsRow
+                  action={
+                    <Badge
+                      tone={
+                        localStateHealth?.status === "healthy"
+                          ? "success"
+                          : localStateHealth?.status === "degraded_recovered"
+                            ? "warning"
+                            : "danger"
+                      }
+                      value={
+                        localStateHealth?.status === "healthy"
+                          ? "정상"
+                          : localStateHealth?.status === "degraded_recovered"
+                            ? "자동 복구됨"
+                            : localStateHealth
+                              ? "복구 확인 필요"
+                              : "확인 중"
+                      }
+                    />
+                  }
+                  description={
+                    localStateHealth?.status === "degraded_recovered"
+                      ? "손상된 원본을 보존하고 최근 정상 복구 지점으로 열었습니다. 백업을 새로 저장하세요."
+                      : localStateHealth?.status === "degraded_empty"
+                        ? "정상 복구 지점을 찾지 못했습니다. 기존 손상본은 보존되어 있습니다."
+                        : `스키마 v${localStateHealth?.schemaVersion ?? "-"} · 저장 파일 무결성 검사 사용`
+                  }
+                  icon={<Database size={18} />}
+                  title="ORBIT 업무 상태"
+                />
+                <SettingsRow
+                  action={
+                    <div className="provider-actions">
+                      <button
+                        className="secondary-button"
+                        disabled={dataAction !== null}
+                        onClick={() => void runDataAction(
+                          "export",
+                          () => window.opencrab.exportLocalStateBackup(),
+                        )}
+                        type="button"
+                      >
+                        <Download size={15} />
+                        {dataAction === "export" ? "저장 중" : "백업 저장"}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={dataAction !== null}
+                        onClick={() => void runDataAction(
+                          "restore",
+                          () => window.opencrab.restoreLocalStateBackup(),
+                        )}
+                        type="button"
+                      >
+                        <RotateCcw size={15} />
+                        {dataAction === "restore" ? "검증 중" : "백업 복원"}
+                      </button>
+                    </div>
+                  }
+                  description={
+                    localStateHealth?.lastBackupAt
+                      ? `최근 백업 ${new Date(localStateHealth.lastBackupAt).toLocaleString("ko-KR")}`
+                      : "새 PC 이동용 백업에는 메일 원문, 검색 DB, 로그인 정보가 포함되지 않습니다."
+                  }
+                  icon={<Download size={18} />}
+                  title="개인 업무 백업"
+                />
+              </SettingsGroup>
+              {dataNotice ? (
+                <div className="connection-message neutral">
+                  <CheckCircle2 size={16} />
+                  <span>{dataNotice}</span>
+                </div>
+              ) : null}
+              <span className="settings-group-label">데이터 통제 원칙</span>
               <SettingsGroup>
                 <SettingsRow
                   description="출처 없는 값은 자동 확정하지 않습니다."
@@ -1605,14 +1738,23 @@ function SettingsNavigationGroup({
       <span>{label}</span>
       {items.map((item) => {
         const Icon = item.icon;
+        const active = section === item.id;
         return (
           <button
-            aria-current={section === item.id ? "page" : undefined}
-            className={section === item.id ? "active" : ""}
+            aria-current={active ? "page" : undefined}
+            className={active ? "active" : ""}
             key={item.id}
             onClick={() => onSelect(item.id)}
             type="button"
           >
+            {active ? (
+              <motion.span
+                aria-hidden="true"
+                className="settings-nav-active-surface"
+                layoutId="settings-navigation-active"
+                transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              />
+            ) : null}
             <Icon size={16} />
             <span>{item.label}</span>
           </button>
@@ -1643,13 +1785,18 @@ function SettingsPage({
   children: ReactNode;
 }) {
   return (
-    <section className="settings-page">
+    <motion.section
+      animate={{ opacity: 1, y: 0 }}
+      className="settings-page"
+      initial={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+    >
       <header className="settings-page-header">
         <h2>{title}</h2>
         <p>{description}</p>
       </header>
       {children}
-    </section>
+    </motion.section>
   );
 }
 

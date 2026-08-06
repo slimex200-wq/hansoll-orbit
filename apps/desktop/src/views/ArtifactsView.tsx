@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   TableProperties,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Badge,
   CaseSelect,
@@ -505,10 +506,13 @@ export function ArtifactsView({
           const RecipeIcon = recipe.icon;
           return (
             <div key={recipe.id} role="listitem">
-              <button
+              <motion.button
                 aria-pressed={type === recipe.id}
                 className={type === recipe.id ? "recipe active" : "recipe"}
                 onClick={() => selectRecipe(recipe.id)}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.985 }}
+                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                 type="button"
               >
                 <div className="recipe-icon-row">
@@ -520,7 +524,7 @@ export function ArtifactsView({
                 <strong>{recipe.label}</strong>
                 {recommended ? <span className="badge badge-info">추천</span> : null}
                 <span>{recipe.review}</span>
-              </button>
+              </motion.button>
             </div>
           );
         })}
@@ -529,7 +533,15 @@ export function ArtifactsView({
       {error ? <ErrorBanner message={error} /> : null}
       {working ? <LoadingBlock label="산출물 작업을 처리하는 중" state="composing" /> : null}
 
+      <AnimatePresence initial={false}>
       {showCreate ? (
+        <motion.div
+          animate={{ height: "auto", opacity: 1, y: 0 }}
+          className="artifact-create-presence"
+          exit={{ height: 0, opacity: 0, y: -4 }}
+          initial={{ height: 0, opacity: 0, y: -4 }}
+          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+        >
         <Panel title="새 양식 작업">
           <form className="artifact-form" onSubmit={create}>
             <div className="artifact-selection-summary">
@@ -711,13 +723,22 @@ export function ArtifactsView({
             </footer>
           </form>
         </Panel>
+        </motion.div>
       ) : null}
+      </AnimatePresence>
 
       <Panel title="생성·검토 현황">
         {state.artifactJobs.length ? (
           <div className="artifact-list">
-            {state.artifactJobs.map((job) => (
-              <div className="artifact-row" key={job.id}>
+            {state.artifactJobs.map((job, index) => (
+              <motion.div
+                animate={{ opacity: 1, y: 0 }}
+                className="artifact-row"
+                initial={{ opacity: 0, y: 5 }}
+                key={job.id}
+                layout="position"
+                transition={{ delay: Math.min(index, 4) * 0.035, duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              >
                 <div className="artifact-type">
                   <FileCheck2 size={18} />
                 </div>
@@ -788,7 +809,7 @@ export function ArtifactsView({
                     </button>
                   ) : null}
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         ) : (

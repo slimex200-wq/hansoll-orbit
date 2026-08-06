@@ -11,6 +11,8 @@ import {
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
+import { motion } from "motion/react";
+import { MotionNumber } from "../components/Motion";
 import { Badge, Panel } from "../components/UI";
 import { caseTitle, formatDate, isOverdue } from "../lib";
 import type {
@@ -86,7 +88,7 @@ function DashboardMetric({
         <Icon size={16} />
       </span>
       <span className="dashboard-metric-copy">
-        <strong>{value}</strong>
+        <strong><MotionNumber value={value} /></strong>
         <small>{label}</small>
       </span>
       <ArrowRight size={14} />
@@ -206,10 +208,12 @@ export function DashboardView({
           {openTasks.length ? (
             <div className="dashboard-task-list">
               {openTasks.slice(0, 6).map((task) => (
-                <button
+                <motion.button
                   className="dashboard-task-row"
                   key={task.id}
+                  layout="position"
                   onClick={() => onNavigate("tasks")}
+                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                   type="button"
                 >
                   <span className="dashboard-task-state" />
@@ -225,7 +229,7 @@ export function DashboardView({
                     </small>
                     <Badge value={task.status} />
                   </span>
-                </button>
+                </motion.button>
               ))}
             </div>
           ) : (
@@ -321,10 +325,12 @@ export function DashboardView({
               <span>상태</span>
             </div>
             {state.cases.slice(0, 5).map((workCase) => (
-              <button
+              <motion.button
                 className="table-row dashboard-case-row"
                 key={workCase.id}
+                layout="position"
                 onClick={() => onNavigate("cases")}
+                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                 type="button"
               >
                 <strong>{workCase.title}</strong>
@@ -334,7 +340,7 @@ export function DashboardView({
                 <span>
                   <Badge value={workCase.status} />
                 </span>
-              </button>
+              </motion.button>
             ))}
           </div>
         ) : (

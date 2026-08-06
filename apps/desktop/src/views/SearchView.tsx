@@ -12,6 +12,8 @@ import {
   Search,
   Settings,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { MotionTabIndicator } from "../components/Motion";
 import { EmptyState, ErrorBanner, LoadingBlock, PageHeader, Panel } from "../components/UI";
 import { extractPath, formatDate, presentError, textValue } from "../lib";
 import type { AuditResult, DomainState, MicrosoftStatus, SearchBundle } from "../types";
@@ -324,6 +326,7 @@ export function SearchView({
             type="button"
           >
             {label}
+            {tab === id ? <MotionTabIndicator layoutId="search-tab-indicator" /> : null}
           </button>
         ))}
       </div>
@@ -378,10 +381,25 @@ export function SearchView({
       ) : null}
 
       {error ? <ErrorBanner message={error} /> : null}
-      {loading ? <LoadingBlock label="연결된 업무 자료를 검색하는 중" state="searching" /> : null}
+      {loading ? (
+        <div className="search-loading-state">
+          <LoadingBlock label="연결된 업무 자료를 검색하는 중" state="searching" />
+          <div aria-hidden="true" className="motion-skeleton-list">
+            <span /><span /><span />
+          </div>
+        </div>
+      ) : null}
 
+      <AnimatePresence initial={false} mode="sync">
       {result && !loading ? (
-        <div className="search-results">
+        <motion.div
+          animate={{ opacity: 1, y: 0 }}
+          className="search-results"
+          exit={{ opacity: 0, y: -3 }}
+          initial={{ opacity: 0, y: 5 }}
+          key={`${tab}-${count}`}
+          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+        >
           {(tab === "all" || tab === "styles") && result.styles.length ? (
             <Panel title={`Style·업무자료 ${result.styles.length}`}>
               <div className="evidence-list">
@@ -512,8 +530,9 @@ export function SearchView({
           ) : null}
 
           {count === 0 ? <EmptyState title="일치하는 업무 자료가 없습니다" /> : null}
-        </div>
+        </motion.div>
       ) : null}
+      </AnimatePresence>
 
       {!result && !loading ? <EmptyState title="검색어를 입력하세요" /> : null}
     </>

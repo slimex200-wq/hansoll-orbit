@@ -181,6 +181,85 @@ python .\scripts\production_smoke_check.py
 python -m unittest discover -s tests
 ```
 
+## ORBIT Desktop Release Trust
+
+Production ORBIT desktop distribution uses a signed Windows NSIS installer plus
+`release-manifest.json`. The manifest is generated beside the installer and
+records schema version, app version, channel (`stable` or `beta`), installer
+filename, byte size, SHA-256, creation time, and Git commit.
+
+Local release gate from `apps/desktop`:
+
+```powershell
+npm run package:prod
+npm run release:manifest:create -- --channel stable
+npm run release:manifest:verify -- --channel stable
+```
+
+Use `--channel beta` only for a beta rollout. Verification must be run against
+the installer produced by the same `package:prod` invocation. It fails closed if
+the manifest version, channel, commit, filename, size, hash, or Authenticode
+signature does not match.
+
+GitHub release workflow:
+
+- Push tags matching `v*` to build, sign, verify, and publish only the verified
+  installer plus `release-manifest.json`.
+- Run `workflow_dispatch` with `dry_run: true` to build and verify without
+  publishing. This is the required rehearsal path before a production tag.
+- Configure `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` repository secrets before
+  any release run. Missing secrets fail the workflow before packaging.
+- Do not upload installers manually unless they match the verified manifest from
+  the same workflow run.
+
+Offline installer procedure:
+
+1. Download the installer and `release-manifest.json` from the verified release
+   or dry-run artifact.
+2. On a trusted Windows machine with the repository checked out at the manifest
+   commit, place both files in the same directory.
+3. From `apps/desktop`, run:
+
+   ```powershell
+   npm run release:manifest:verify -- --channel stable --installer "<path-to-installer>"
+   ```
+
+4. Install only after verification succeeds. Preserve the manifest with the
+   installer in the internal distribution folder.
+
+Rollback procedure:
+
+1. Identify the last known-good `v*` release and its channel.
+2. Download that release's installer and `release-manifest.json`.
+3. Verify the manifest and Authenticode signature before redistribution.
+4. Distribute the older verified installer as the rollback build. ORBIT keeps
+   user operational state local, so rollback does not require server-side state
+   migration. If a user restored from backup or changed local data after the
+   failed upgrade, preserve that local state and follow the backup/restore
+   procedure instead of replacing user data.
+
+Local work-state backup and new-PC restore:
+
+1. In ORBIT, open **관리 > 데이터 및 권한** and select **백업 저장**.
+2. Move the JSON file through an approved company storage channel.
+3. On the destination PC, install a verified ORBIT release and select **백업
+   복원**. ORBIT validates size before reading, then validates schema, logical
+   entry names, and every SHA-256 before changing state. It also creates a
+   pre-restore recovery point.
+4. The bundle includes workbench records, confirmed buyer profiles, linked
+   folder pointers, app preferences, and safe user buyer packs. Reconnect
+   folders whose paths changed on the new PC.
+5. Mail bodies, mail/search databases, source workbooks, caches, AI login state,
+   Microsoft tokens, and credentials are never included. Reconnect Outlook and
+   rebuild indexes on the destination PC.
+6. A rejected restore writes only a privacy-safe local error code to
+   `local-state-diagnostics.jsonl`; the selected path and file contents are not
+   logged.
+7. Restore stages auxiliary targets under a local transaction journal and
+   commits the domain state last. If ORBIT or Windows stops during restore, the
+   next startup compares the journal with the committed restore audit and
+   either keeps the completed restore or rolls auxiliary files back.
+
 ## Cleanup
 
 Preview cleanup candidates:

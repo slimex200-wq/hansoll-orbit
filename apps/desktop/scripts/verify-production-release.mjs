@@ -75,13 +75,14 @@ function main() {
 
   const sourceStatus = execFileSync(
     "git",
-    ["status", "--porcelain", "--untracked-files=all", "--", "apps/desktop"],
+    ["status", "--porcelain", "--untracked-files=all"],
     { cwd: repoRoot, encoding: "utf8" },
   ).trim();
   if (sourceStatus) {
     throw new Error(
-      "Production packaging requires committed ORBIT desktop source. "
-      + "Commit or intentionally restore the listed app changes before release.",
+      "Production packaging requires a clean committed repository because the installer includes "
+      + "desktop, Python backend, scripts, and knowledge resources. Commit or intentionally restore "
+      + "all listed changes before release.",
     );
   }
 

@@ -19,6 +19,7 @@ import {
   Search,
   Settings2,
 } from "lucide-react";
+import { motion } from "motion/react";
 import type { AgentConnectionStatus, AuditResult, ViewId } from "../types";
 
 const navigation: Array<{
@@ -210,13 +211,21 @@ export function Shell({
           <nav aria-label="주요 메뉴">
             {navigation.map((item) => {
               const Icon = item.icon;
+              const active = view === item.id || (item.id === "tasks" && view === "timeline");
               return (
                 <button
-                  className={view === item.id || (item.id === "tasks" && view === "timeline") ? "nav-item active" : "nav-item"}
+                  className={active ? "nav-item active" : "nav-item"}
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
                   type="button"
                 >
+                  {active ? (
+                    <motion.span
+                      className="nav-active-surface"
+                      layoutId="primary-navigation-active"
+                      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  ) : null}
                   <Icon size={17} />
                   <span>{item.label}</span>
                 </button>

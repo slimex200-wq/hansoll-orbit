@@ -61,6 +61,20 @@ IGNORED_PRIVATE_PREFIXES = (
 
 SECRET_FILE_NAMES = {"auth.json", "credentials.json", "tokens.json"}
 PACKAGE_PRIVATE_SUFFIXES = (".sqlite", ".sqlite3", ".db", ".duckdb", ".env")
+SYNTHETIC_FIXTURE_ROOTS = (
+    "apps/desktop/it-review",
+    "examples",
+    "tests/fixtures",
+    "knowledge/workbook_layout_specs",
+    "knowledge/buyers/generic",
+)
+SYNTHETIC_FIXTURE_FILES = ("apps/desktop/electron/it-review-runtime.cjs",)
+SYNTHETIC_PRIVATE_PATTERNS = (
+    (re.compile(rb"C:\\+Users\\+[^\\\x00\r\n]{1,120}", re.IGNORECASE), "Windows user path"),
+    (re.compile(rb"OneDrive\s*-\s*(?!Example)", re.IGNORECASE), "company OneDrive path"),
+    (re.compile(rb"[A-Z0-9._%+-]+@hansoll\.com", re.IGNORECASE), "company email"),
+    (re.compile(rb"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,})"), "access token"),
+)
 
 
 def is_generated_secret(path: str) -> bool:
@@ -277,6 +291,36 @@ def check_packaged_private_data(package_dir: Path) -> str:
     return f"{len(archives)} app archive(s) and packaged files contain no private data artifacts"
 
 
+def check_synthetic_fixture_privacy(root: Path) -> str:
+    candidates: list[Path] = []
+    for relative in SYNTHETIC_FIXTURE_ROOTS:
+        candidate = root / relative
+        if candidate.is_dir():
+            candidates.extend(item for item in candidate.rglob("*") if item.is_file())
+    candidates.extend(
+        candidate
+        for relative in SYNTHETIC_FIXTURE_FILES
+        if (candidate := root / relative).is_file()
+    )
+
+    offenders: list[str] = []
+    scanned = 0
+    for candidate in sorted(set(candidates)):
+        # Synthetic fixtures must stay small enough to inspect in CI. Large real
+        # workbooks and exports belong in ignored data/output folders instead.
+        if candidate.stat().st_size > 10 * 1024 * 1024:
+            offenders.append(f"{candidate.relative_to(root).as_posix()}: oversized fixture")
+            continue
+        data = candidate.read_bytes()
+        scanned += 1
+        for pattern, label in SYNTHETIC_PRIVATE_PATTERNS:
+            if pattern.search(data):
+                offenders.append(f"{candidate.relative_to(root).as_posix()}: {label}")
+    if offenders:
+        raise RuntimeError("private data in synthetic fixtures: " + ", ".join(offenders[:20]))
+    return f"{scanned} synthetic fixture file(s) contain no private identifiers or tokens"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run OpenCrab production-readiness smoke checks.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
@@ -296,6 +340,7 @@ def main() -> int:
             "runtime_dependencies",
             lambda: check_declared_runtime_dependencies(root),
         ),
+        run_check("synthetic_fixture_privacy", lambda: check_synthetic_fixture_privacy(root)),
     ]
     if args.package_dir:
         checks.append(

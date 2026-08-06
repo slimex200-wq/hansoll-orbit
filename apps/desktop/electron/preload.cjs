@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld("opencrab", {
     return () => ipcRenderer.removeListener("buyer-context:changed", listener);
   },
   getState: () => ipcRenderer.invoke("domain:get-state"),
+  getLocalStateHealth: () => ipcRenderer.invoke("domain:get-health"),
+  exportLocalStateBackup: () => ipcRenderer.invoke("domain:export-backup"),
+  restoreLocalStateBackup: () => ipcRenderer.invoke("domain:restore-backup"),
   createCase: (input) => ipcRenderer.invoke("domain:create-case", input),
   createCaseWithTasks: (input) =>
     ipcRenderer.invoke("domain:create-case-with-tasks", input),

@@ -10,6 +10,7 @@ import {
   ListTodo,
   Plus,
 } from "lucide-react";
+import { MotionNumber } from "../components/Motion";
 import { CaseSelect, EmptyState, ErrorBanner, PageHeader, Panel } from "../components/UI";
 import {
   caseTitle,
@@ -369,7 +370,7 @@ export function PlannerView({
 }
 
 function SummaryMetric({ icon: Icon, label, tone = "neutral", value }: { icon: typeof ListTodo; label: string; tone?: string; value: number }) {
-  return <div className={`planner-summary-item ${tone}`}><Icon size={17} /><div><strong>{value}</strong><span>{label}</span></div></div>;
+  return <div className={`planner-summary-item ${tone}`}><Icon size={17} /><div><strong><MotionNumber value={value} /></strong><span>{label}</span></div></div>;
 }
 
 function ModeButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof ListTodo; label: string; onClick(): void }) {

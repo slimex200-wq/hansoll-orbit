@@ -128,7 +128,7 @@ try {
   assert.deepEqual(
     await window.evaluate(() => window.opencrab.getState()),
     {
-      schemaVersion: 5,
+      schemaVersion: 6,
       cases: [],
       tasks: [],
       milestones: [],

@@ -352,3 +352,22 @@ test("cancelled actions are audited as cancelled", async () => {
   const audit = store.getState().auditEvents.find((item) => item.action === "agent.action.approved");
   assert.equal(audit.detail.result, "cancelled");
 });
+
+test("reviewed Agent updates mark protected fields as agent reviewed", async () => {
+  const { service, store, workCase } = fixture();
+  const review = service.prepare([{
+    id: "reviewed_update",
+    type: "update_case",
+    label: "Reviewed case update",
+    reason: "The user approved replacing the owner from the Agent proposal.",
+    target_id: workCase.id,
+    case_id: workCase.id,
+    input: { owner: "Work Agent owner" },
+  }]);
+
+  await service.execute(review.token, ["reviewed_update"]);
+  const updated = store.getState().cases.find((item) => item.id === workCase.id);
+
+  assert.equal(updated.owner, "Work Agent owner");
+  assert.equal(updated.fieldOrigins.owner.origin, "agent_reviewed");
+});

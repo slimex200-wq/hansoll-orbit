@@ -7,6 +7,40 @@ from opencrab_starter.work_agent import answer_query, compose_answer
 
 
 class WorkAgentAnswerTests(unittest.TestCase):
+    def test_current_style_work_without_evidence_returns_source_recovery_only(
+        self,
+    ) -> None:
+        judgment = {
+            "query": "233900002에 대해서 오늘 해야할거 리스트업좀",
+            "classification": {
+                "styles": ["233900002"],
+                "primary_concept": "mail_followup",
+                "requires_style": True,
+                "current_work_query": True,
+                "mail_scope": {},
+            },
+            "evidence_summary": {
+                "style_index": {"hit_count": 0, "top_hits": []},
+                "fact_index": {"hit_count": 0, "top_hits": []},
+                "visual_index": {"hit_count": 0, "top_hits": []},
+                "mail_index": {"hit_count": 0, "top_hits": []},
+            },
+            "style_evidence_cards": [],
+            "decisions": {"confidence": "low", "risks": [], "clarification_hooks": []},
+        }
+
+        with patch("opencrab_starter.work_agent.judge_query", return_value=judgment):
+            result = answer_query(object(), judgment["query"], use_model=False)
+
+        answer = result["answer"]
+        serialized = str(answer)
+        self.assertEqual(answer["recommendation"]["title"], "233900002의 확인된 오늘 업무가 없습니다.")
+        self.assertEqual(len(answer["action_plan"]), 2)
+        self.assertEqual(answer["action_plan"][0]["title"], "최신 메일 또는 원본 연결")
+        self.assertNotIn("Submit form", serialized)
+        self.assertNotIn("dispatch", serialized.casefold())
+        self.assertEqual(answer["app_actions"], [])
+
     def test_scoped_sender_zero_hits_are_unverified_when_mail_source_is_partial(
         self,
     ) -> None:

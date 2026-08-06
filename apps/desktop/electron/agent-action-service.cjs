@@ -51,7 +51,7 @@ const ACTION_INPUT_RULES = {
   create_case: { required: ["title"], allowed: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "evidence", "pendingDecisions"] },
   update_case: { requiredAny: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "pendingDecisions"], allowed: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "pendingDecisions"] },
   create_task: { required: ["title"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"] },
-  update_task: { requiredAny: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check"] },
+  update_task: { requiredAny: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"] },
   create_milestone: { required: ["label"], allowed: ["type", "label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "source", "dependsOnIds"] },
   update_milestone: { requiredAny: ["label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "dependsOnIds"], allowed: ["label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "dependsOnIds"] },
   record_decision: { required: ["question", "outcome"], allowed: ["question", "outcome", "rationale", "source", "selectedEvidence", "rejectedAlternatives", "impactSummary", "releaseCase"] },
@@ -501,23 +501,23 @@ function createAgentActionService(options) {
     const state = currentStore().getState();
     switch (action.type) {
       case "create_case": {
-        const created = currentStore().createCase(pickInput(input, [
-          "title", "status", "priority", "owner", "department", "stage", "summary",
-          "businessKeys", "evidence", "pendingDecisions",
-        ]));
+        const created = currentStore().createReviewedCase(pickInput(input, [
+            "title", "status", "priority", "owner", "department", "stage", "summary",
+            "businessKeys", "evidence", "pendingDecisions",
+          ]));
         context.lastCaseId = created.id;
         return created;
       }
       case "update_case":
-        return currentStore().updateCase({
+        return currentStore().updateReviewedCase({
           ...pickInput(input, [
             "title", "status", "priority", "owner", "department", "stage", "summary",
-            "businessKeys", "pendingDecisions",
-          ]),
-          id: action.targetId,
-        });
+          "businessKeys", "pendingDecisions",
+        ]),
+        id: action.targetId,
+      });
       case "create_task":
-        return currentStore().createTask({
+        return currentStore().createReviewedTask({
           ...pickInput(input, [
             "title", "status", "owner", "dueAt", "due_at", "source", "instruction",
             "completionCheck", "completion_check", "evidence",
@@ -526,10 +526,10 @@ function createAgentActionService(options) {
           caseId: requireCaseId(action, context.lastCaseId, state),
         });
       case "update_task":
-        return currentStore().updateTask({
+        return currentStore().updateReviewedTask({
           ...pickInput(input, [
             "title", "status", "owner", "dueAt", "due_at", "source", "instruction",
-            "completionCheck", "completion_check",
+            "completionCheck", "completion_check", "evidence",
           ]),
           dueAt: input.dueAt ?? input.due_at,
           id: action.targetId,
@@ -621,13 +621,9 @@ function createAgentActionService(options) {
     const context = { lastCaseId: "", lastArtifactId: "" };
     const results = [];
     for (const action of actions) {
-      const beforeState = currentStore().getState();
-      const before = targetSnapshot(beforeState, action);
       try {
         const value = await runAction(action, context);
-        const afterState = currentStore().getState();
         const targetId = value?.id || action.targetId || context.lastArtifactId || context.lastCaseId;
-        const after = targetSnapshot(afterState, { ...action, targetId }) || value || null;
         const resultStatus = value === null ? "cancelled" : "success";
         currentStore().recordAuditEvent({
           action: "agent.action.approved",
@@ -639,9 +635,7 @@ function createAgentActionService(options) {
             evidenceHash: review.evidenceHash,
             evidenceRevision: review.evidenceRevision,
             proposalId: action.id,
-            label: action.label,
-            before,
-            after,
+            changedFields: Object.keys(action.input || {}).sort(),
             result: resultStatus,
           },
         });
@@ -657,10 +651,9 @@ function createAgentActionService(options) {
             evidenceHash: review.evidenceHash,
             evidenceRevision: review.evidenceRevision,
             proposalId: action.id,
-            label: action.label,
-            before,
+            changedFields: Object.keys(action.input || {}).sort(),
             result: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            errorCode: "agent_action_failed",
           },
         });
         results.push({ id: action.id, type: action.type, label: action.label, status: "failed", error: error instanceof Error ? error.message : String(error), targetId: action.targetId });

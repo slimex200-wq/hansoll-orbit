@@ -128,6 +128,16 @@ const auditReadability = async (screen) => ({
 });
 
 const assertRecipeSelection = async (theme) => {
+  await window.waitForFunction(() => {
+    const grid = document.querySelector(".recipe-grid");
+    const active = grid?.querySelector(".recipe.active");
+    const inactive = grid?.querySelector(".recipe:not(.active)");
+    if (!(active instanceof HTMLElement) || !(inactive instanceof HTMLElement)) return false;
+    const activeStyle = getComputedStyle(active);
+    const inactiveStyle = getComputedStyle(inactive);
+    return activeStyle.backgroundColor !== inactiveStyle.backgroundColor
+      && activeStyle.borderColor !== inactiveStyle.borderColor;
+  });
   const selection = await window.locator(".recipe-grid").evaluate((grid) => {
     const active = grid.querySelector(".recipe.active");
     const inactive = grid.querySelector(".recipe:not(.active)");
@@ -444,7 +454,7 @@ try {
     .waitFor();
   await window
     .getByTestId("desktop-titlebar")
-    .getByText("Work Intelligence", { exact: true })
+    .getByText("IT 검토용", { exact: true })
     .waitFor();
 
   const titlebarMetrics = await window.getByTestId("desktop-titlebar").evaluate((element) => ({
@@ -1288,6 +1298,39 @@ try {
     path: path.join(outputDirectory, "08-settings-diagnostics.png"),
     fullPage: true,
   });
+
+  await setWindowContentSize(1440, 900);
+  const settingsHeaderPositions = {};
+  for (const label of [
+    "계정",
+    "부서 및 바이어",
+    "화면 및 언어",
+    "앱 연결",
+    "Work Agent",
+    "템플릿",
+    "진단 및 동기화",
+    "데이터 및 권한",
+  ]) {
+    await settingsNavigation.getByRole("button", { name: label, exact: true }).click();
+    await window.getByRole("heading", { name: label, exact: true }).waitFor();
+    await window.waitForTimeout(220);
+    settingsHeaderPositions[label] = await window
+      .locator(".settings-page-header")
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
+  }
+  const settingsHeaderLefts = Object.values(settingsHeaderPositions).map((item) => item.left);
+  const settingsHeaderTops = Object.values(settingsHeaderPositions).map((item) => item.top);
+  assert.ok(
+    Math.max(...settingsHeaderLefts) - Math.min(...settingsHeaderLefts) <= 1,
+    `Settings page headers shift horizontally between tabs: ${JSON.stringify(settingsHeaderPositions)}`,
+  );
+  assert.ok(
+    Math.max(...settingsHeaderTops) - Math.min(...settingsHeaderTops) <= 1,
+    `Settings page headers shift vertically between tabs: ${JSON.stringify(settingsHeaderPositions)}`,
+  );
 
   const appearanceSettingsButton = settingsNavigation.getByRole("button", {
     name: "화면 및 언어",

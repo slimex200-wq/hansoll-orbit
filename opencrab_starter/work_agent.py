@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC, datetime, timedelta, timezone
@@ -108,6 +109,11 @@ def answer_query(
         from .agent_synthesis import apply_missing_target_guardrail
 
         answer = apply_missing_target_guardrail(answer)
+    if _current_style_work_has_no_evidence(judgment, app_context):
+        answer = _apply_current_work_no_evidence_guardrail(answer, judgment)
+        synthesis["guardrails"] = (
+            f"{synthesis.get('guardrails') or ''},current_work_zero_evidence"
+        ).strip(",")
     mail_scope = (judgment.get("classification") or {}).get("mail_scope") or {}
     scoped_mail_hits = int(
         ((judgment.get("evidence_summary") or {}).get("mail_index") or {}).get(
@@ -136,6 +142,79 @@ def answer_query(
         "judgment": judgment,
         "synthesis": synthesis,
     }
+
+
+def _current_style_work_has_no_evidence(
+    judgment: dict[str, Any],
+    app_context: dict[str, Any] | None,
+) -> bool:
+    classification = judgment.get("classification") or {}
+    styles = [str(item).strip() for item in classification.get("styles") or [] if str(item).strip()]
+    if not classification.get("current_work_query") or not styles:
+        return False
+
+    evidence = judgment.get("evidence_summary") or {}
+    indexed_hits = sum(
+        int((evidence.get(name) or {}).get("hit_count") or 0)
+        for name in ("style_index", "mail_index", "fact_index", "visual_index")
+    )
+    if indexed_hits:
+        return False
+
+    serialized_context = json.dumps(app_context or {}, ensure_ascii=False, default=str)
+    return not any(style.casefold() in serialized_context.casefold() for style in styles)
+
+
+def _apply_current_work_no_evidence_guardrail(
+    answer: dict[str, Any],
+    judgment: dict[str, Any],
+) -> dict[str, Any]:
+    protected = dict(answer)
+    classification = judgment.get("classification") or {}
+    subject = str((classification.get("styles") or ["해당 Style"])[0])
+    protected["summary"] = (
+        f"{subject}에 직접 연결된 최신 메일, 파일, 구조화 정보가 현재 검색 범위에서 0건입니다. "
+        "확인되지 않은 회신·제출·승인 업무는 오늘 할 일로 만들지 않았습니다."
+    )
+    protected["recommendation"] = {
+        "state": "source_required",
+        "title": f"{subject}의 확인된 오늘 업무가 없습니다.",
+        "conclusion": (
+            "지금 확정할 수 있는 업무 목록은 없습니다. 먼저 Outlook 메일을 갱신하거나 "
+            "사용할 최신 원본을 지정한 뒤, 확인된 요청과 마감만 오늘 업무로 정리해야 합니다."
+        ),
+        "next_move": f"Outlook 메일을 갱신해 {subject}를 다시 검색하거나 최신 원본 파일 1건을 지정하세요.",
+    }
+    protected["action_plan"] = [
+        _action_step(
+            1,
+            "최신 메일 또는 원본 연결",
+            f"Outlook 메일을 갱신해 {subject}를 다시 검색하거나 사용자가 가진 최신 원본 파일을 지정합니다.",
+            "최신 메일 제목·수신일 또는 원본 파일명 1건이 확인됨",
+            "needs_confirmation",
+        ),
+        _action_step(
+            2,
+            "근거 확인 후 오늘 업무 확정",
+            "확인된 요청사항, 마감, 당사 조치와 상대방 대기 항목만 오늘 목록에 반영합니다.",
+            "각 항목에 근거와 상태가 연결되고 추정 항목이 없음",
+            "after_confirmation",
+        ),
+    ]
+    protected["confirmations"] = [f"{subject} 최신 메일 또는 원본 파일"]
+    protected["deliverables"] = []
+    protected["app_actions"] = []
+    protected["status"] = "needs_confirmation"
+    protected["task_suggestions"] = _tasks_from_action_plan(
+        protected["action_plan"],
+        str(judgment.get("query") or ""),
+    )
+    protected["answer_text"] = (
+        f"현재 판단: {protected['recommendation']['title']}\n"
+        f"{protected['recommendation']['conclusion']}\n"
+        "다음 단계: 최신 메일 또는 원본 연결"
+    )
+    return protected
 
 
 def _apply_scoped_mail_unverified_guardrail(
