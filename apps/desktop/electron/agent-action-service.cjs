@@ -81,6 +81,19 @@ function pickInput(input, fields) {
   );
 }
 
+function compactEvidence(value) {
+  if (typeof value === "string") return cleanText(value, 500);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return Object.fromEntries(
+    [
+      "id", "kind", "label", "title", "detail", "snippet", "source_id",
+      "relative_path", "path", "location", "source_date", "confidence",
+    ]
+      .filter((key) => value[key] !== undefined && value[key] !== null)
+      .map((key) => [key, cleanText(String(value[key]), key === "snippet" ? 500 : 300)]),
+  );
+}
+
 function compactCase(item) {
   return {
     id: item.id,
@@ -93,10 +106,12 @@ function compactCase(item) {
     buyer_name: item.buyerName,
     buyer_pack_id: item.buyerPackId,
     stage: item.stage,
+    summary: cleanText(item.summary, 1_000),
     styles: (item.businessKeys || [])
       .filter((key) => String(key.kind || "").toLowerCase().includes("style"))
       .map((key) => key.value),
     pending_decisions: item.pendingDecisions || [],
+    evidence: (item.evidence || []).slice(0, 6).map(compactEvidence).filter(Boolean),
     updated_at: item.updatedAt,
   };
 }
@@ -159,6 +174,10 @@ function buildAgentAppContext(state, folders = [], mailStatus = null, buyerConte
       status: item.status,
       owner: item.owner,
       due_at: item.dueAt,
+      source: cleanText(item.source, 500),
+      instruction: cleanText(item.instruction, 1_000),
+      completion_check: cleanText(item.completionCheck, 500),
+      evidence: (item.evidence || []).slice(0, 4).map(compactEvidence).filter(Boolean),
       updated_at: item.updatedAt,
     })),
     milestones: (state.milestones || []).slice(0, limits.milestones).map((item) => ({
@@ -176,6 +195,12 @@ function buildAgentAppContext(state, folders = [], mailStatus = null, buyerConte
       case_id: item.caseId,
       question: item.question,
       outcome: item.outcome,
+      rationale: cleanText(item.rationale, 1_000),
+      source: cleanText(item.source, 500),
+      selected_evidence: (item.selectedEvidence || []).slice(0, 6).map(compactEvidence).filter(Boolean),
+      reuse_scope: item.reuseScope || "case",
+      rule_enabled: item.ruleEnabled === true,
+      rule_scope: item.ruleScope || {},
       decided_at: item.decidedAt,
     })),
     artifacts: (state.artifactJobs || []).slice(0, limits.artifacts).map((item) => ({

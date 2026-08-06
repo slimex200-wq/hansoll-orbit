@@ -41,6 +41,10 @@ const dataFiles = [
     path.join(repoRoot, "knowledge", "work_agent_synthesis.schema.json"),
     "knowledge",
   ],
+  [
+    path.join(repoRoot, "knowledge", "work_agent_summary_synthesis.schema.json"),
+    "knowledge",
+  ],
 ];
 const args = [
   "-m",

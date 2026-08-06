@@ -982,8 +982,16 @@ try {
     .filter({ hasText: movingTaskTitle });
   await filteredMovingTask.waitFor();
   await filteredMovingTask.locator("select").selectOption(destinationTaskStatus);
-  await filteredMovingTask.waitFor({ state: "hidden" });
-  await taskFilterTabs.nth(taskStatusTabIndex[destinationTaskStatus]).click();
+  await taskFilterTabs
+    .nth(taskStatusTabIndex[destinationTaskStatus])
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await taskFilterTabs
+      .nth(taskStatusTabIndex[destinationTaskStatus])
+      .getAttribute("aria-pressed"),
+    "true",
+    "Planner did not follow the task into its destination status filter.",
+  );
   const movedTask = window
     .locator(".planner-task-panel .planner-list-item")
     .filter({ hasText: movingTaskTitle });
@@ -1069,11 +1077,17 @@ try {
   await assertRecipeSelection("light");
   const templateInput = window.getByLabel("자동 연결된 회사 원본");
   await templateInput.waitFor();
-  await window.getByText("산출물 등록 보류", { exact: true }).waitFor();
+  await window.getByText("회사 원본 자동 탐색 중", { exact: true }).waitFor({ state: "hidden" });
+  const confirmBlockedDraftTemplate = window.getByRole("button", { name: "이 추천 원본 사용" });
+  if (await confirmBlockedDraftTemplate.count()) await confirmBlockedDraftTemplate.click();
+  await window.waitForFunction(
+    () => Boolean(document.querySelector('input[aria-label="자동 연결된 회사 원본"]')?.value),
+  );
+  await window.getByText("초안 작업은 계속할 수 있습니다", { exact: true }).waitFor();
   assert.equal(
     await window.getByRole("button", { name: "작업 등록" }).isDisabled(),
-    true,
-    "Blocked Agent case allowed an artifact job before decisions were resolved.",
+    false,
+    "A pending decision blocked a source-backed artifact draft.",
   );
   await selectArtifactRecipe("Costing Sheet");
   await window.waitForFunction(
@@ -1084,15 +1098,11 @@ try {
       return input?.value.includes("COSTING") && input.value.includes("271900010");
     },
   );
-  assert.equal(
-    await window.getByText("산출물 등록 보류", { exact: true }).count(),
-    1,
-    "A blocked case bypassed the decision gate through a costing artifact.",
-  );
+  await window.getByText("초안 작업은 계속할 수 있습니다", { exact: true }).waitFor();
   assert.equal(
     await window.getByRole("button", { name: "작업 등록" }).isDisabled(),
-    true,
-    "A blocked case enabled costing artifact registration.",
+    false,
+    "A pending decision blocked a costing draft with a resolved company source.",
   );
   const costingTemplatePath = await templateInput.inputValue();
   await window.screenshot({
@@ -1116,16 +1126,14 @@ try {
   let pendingDecisionCount = await pendingDecisionRows.count();
   while (pendingDecisionCount > 0) {
     await pendingDecisionRows.first().getByRole("button", { name: "결정 기록" }).click();
-    await window.getByLabel("결정", { exact: true }).fill("E2E verification decision");
+    await window.getByLabel("결론", { exact: true }).fill("E2E verification decision");
+    await window.getByText("근거·인수인계 추가", { exact: false }).click();
     await window.getByLabel("판단 근거").fill("Workflow gate verification");
     await window.getByPlaceholder("근거 위치").fill("desktop e2e");
     await window.getByLabel("채택한 근거").fill("E2E workflow evidence");
     await window.getByLabel("영향·인수인계").fill("Release the reviewed workflow gate");
-    const releaseCase = window.getByLabel("마지막 결정 대기가 해소되면 업무 건을 검토 상태로 전환");
-    assert.equal(await releaseCase.isChecked(), false, "Decision release was enabled by default.");
-    await releaseCase.check();
-    await window.getByText(/업무 건의 보류 상태도 함께 해제됩니다/).waitFor();
-    await window.getByRole("button", { name: "기록 저장", exact: true }).click();
+    await window.getByText("결론만 입력하면 이 대기 항목이 해소됩니다.", { exact: true }).waitFor();
+    await window.getByRole("button", { name: "결론 저장하고 대기 해소", exact: true }).click();
     await window.waitForFunction(
       ({ title, previousCount }) =>
         [...document.querySelectorAll(".pending-decision-row")]
@@ -1189,7 +1197,8 @@ try {
   await window.getByRole("heading", { name: "결정·인수인계" }).waitFor();
   await window.getByRole("button", { name: "결정 기록", exact: true }).first().click();
   await window.getByPlaceholder("판단이 필요했던 항목").fill("Current submit stage");
-  await window.getByLabel("결정", { exact: true }).fill("Review latest mail before selecting stage.");
+  await window.getByLabel("결론", { exact: true }).fill("Review latest mail before selecting stage.");
+  await window.getByText("근거·인수인계 추가", { exact: false }).click();
   await window.getByLabel("판단 근거").fill("Work Agent evidence summary");
   await window.getByLabel("채택한 근거").fill("Latest Work Agent evidence summary");
   await window.getByLabel("영향·인수인계").fill("Submit stage owner reviews the latest mail before execution");

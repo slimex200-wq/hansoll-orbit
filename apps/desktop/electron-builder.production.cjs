@@ -45,6 +45,10 @@ module.exports = {
       to: "runtime/knowledge/work_agent_synthesis.schema.json",
     },
     {
+      from: "../../knowledge/work_agent_summary_synthesis.schema.json",
+      to: "runtime/knowledge/work_agent_summary_synthesis.schema.json",
+    },
+    {
       from: "../../knowledge/workbook_layout_specs",
       to: "runtime/knowledge/workbook_layout_specs",
     },

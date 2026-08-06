@@ -486,7 +486,7 @@ test("blocked case cannot bypass pending decisions through a direct status updat
   assert.equal(store.getState().cases[0].status, "blocked");
 });
 
-test("createArtifactJob applies decision gates to every artifact workflow", () => {
+test("artifact drafts can be registered before decisions but cannot be approved", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
   const statePath = path.join(directory, "state.json");
   const store = createDomainStore(statePath);
@@ -496,23 +496,95 @@ test("createArtifactJob applies decision gates to every artifact workflow", () =
     pendingDecisions: ["Confirm stage"],
   });
 
-  assert.throws(
-    () => store.createArtifactJob({ caseId: blockedCase.id, title: "Solid", type: "submit_solid" }),
-    /보류 중인 업무 건/,
-  );
-  assert.throws(
-    () => store.createArtifactJob({ caseId: pendingCase.id, title: "Solid", type: "submit_solid" }),
-    /결정 대기 항목/,
-  );
+  const blockedDraft = store.createArtifactJob({
+    caseId: blockedCase.id,
+    title: "Costing",
+    type: "costing_sheet",
+  });
+  const pendingDraft = store.createArtifactJob({
+    caseId: pendingCase.id,
+    title: "Recap",
+    type: "costing_recap",
+  });
 
+  assert.equal(blockedDraft.reviewState, "required");
+  assert.equal(pendingDraft.reviewState, "required");
   assert.throws(
-    () => store.createArtifactJob({ caseId: blockedCase.id, title: "Costing", type: "costing_sheet" }),
-    /보류 중인 업무 건/,
+    () => store.updateArtifactJob({ id: blockedDraft.id, reviewState: "approved" }),
+    /보류 사유/,
   );
   assert.throws(
-    () => store.createArtifactJob({ caseId: pendingCase.id, title: "Recap", type: "costing_recap" }),
+    () => store.updateArtifactJob({ id: pendingDraft.id, reviewState: "approved" }),
     /결정 대기 항목/,
   );
+});
+
+test("reusable decisions capture case scope and can be disabled or deleted", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const workCase = store.createCase({
+    title: "Talbots submit rule",
+    buyerId: "talbots",
+    buyerName: "Talbots",
+    department: "Sales",
+    stage: "Submit",
+  });
+
+  const decision = store.createDecision({
+    caseId: workCase.id,
+    question: "승인 메일이 없을 때 승인일 처리",
+    outcome: "승인일은 TBD로 유지한다.",
+    reuseScope: "future",
+  });
+
+  assert.equal(decision.reuseScope, "future");
+  assert.equal(decision.ruleEnabled, true);
+  assert.deepEqual(decision.ruleScope, {
+    buyerId: "talbots",
+    buyerName: "Talbots",
+    department: "Sales",
+    stage: "Submit",
+  });
+
+  const disabled = store.updateDecision({ id: decision.id, ruleEnabled: false });
+  assert.equal(disabled.ruleEnabled, false);
+  store.deleteDecision(decision.id);
+  assert.equal(store.getState().decisions.length, 0);
+  assert.ok(store.getState().auditEvents.some((event) => event.action === "decision.deleted"));
+});
+
+test("matching reusable decisions prevent the same pending question from blocking a later case", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const priorCase = store.createCase({
+    title: "Talbots submit rule source",
+    buyerId: "talbots",
+    buyerName: "Talbots",
+    department: "Sales",
+    stage: "Submit",
+  });
+  store.createDecision({
+    caseId: priorCase.id,
+    question: "What should unsupported fields contain?",
+    outcome: "Leave unsupported values TBD and continue the draft.",
+    reuseScope: "future",
+  });
+
+  const { workCase } = store.createCaseWithTasks({
+    workCase: {
+      title: "Talbots later submit",
+      status: "blocked",
+      buyerId: "talbots",
+      buyerName: "Talbots",
+      department: "Sales",
+      stage: "Submit",
+      pendingDecisions: ["What should unsupported fields contain?"],
+    },
+    tasks: [],
+  });
+
+  assert.deepEqual(workCase.pendingDecisions, []);
+  assert.equal(workCase.status, "review");
 });
 
 test("case cannot close while tasks or artifact review remain open", () => {
@@ -623,6 +695,63 @@ test("rejects a child record when neither an existing nor a new work case is pro
   );
   assert.equal(store.getState().cases.length, 0);
   assert.equal(store.getState().tasks.length, 0);
+});
+
+test("deletes a task without deleting its work case", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const store = createDomainStore(statePath);
+  const workCase = store.createCase({ title: "233900002 follow-up" });
+  const task = store.createTask({ caseId: workCase.id, title: "Confirm shortage qty" });
+
+  const deleted = store.deleteTask(task.id);
+
+  assert.equal(deleted.id, task.id);
+  assert.equal(store.getState().tasks.length, 0);
+  assert.equal(store.getState().cases.length, 1);
+  assert.ok(store.getState().auditEvents.some((event) => event.action === "task.deleted"));
+});
+
+test("deletes a work case and cascades only its local domain records", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const statePath = path.join(directory, "state.json");
+  const store = createDomainStore(statePath);
+  const removedCase = store.createCase({ title: "Remove me" });
+  const keptCase = store.createCase({ title: "Keep me" });
+  store.createTask({ caseId: removedCase.id, title: "Removed task" });
+  store.createTask({ caseId: keptCase.id, title: "Kept task" });
+  store.createMilestone({ caseId: removedCase.id, label: "Removed GAC" });
+  store.createDecision({ caseId: removedCase.id, question: "Removed decision", outcome: "Done" });
+  store.createArtifactJob({ caseId: removedCase.id, title: "Removed artifact", type: "generic" });
+
+  const deleted = store.deleteCase(removedCase.id);
+  const state = store.getState();
+
+  assert.deepEqual(deleted.removed, { tasks: 1, milestones: 1, decisions: 1, artifacts: 1 });
+  assert.deepEqual(state.cases.map((item) => item.id), [keptCase.id]);
+  assert.equal(state.tasks.length, 1);
+  assert.equal(state.tasks[0].caseId, keptCase.id);
+  assert.equal(state.milestones.length, 0);
+  assert.equal(state.decisions.length, 0);
+  assert.equal(state.artifactJobs.length, 0);
+  assert.ok(state.auditEvents.some((event) => event.action === "case.deleted"));
+});
+
+test("deleting a milestone clears dependent references", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "opencrab-domain-"));
+  const store = createDomainStore(path.join(directory, "state.json"));
+  const workCase = store.createCase({ title: "Dependency cleanup" });
+  const source = store.createMilestone({ caseId: workCase.id, label: "L/D" });
+  const dependent = store.createMilestone({
+    caseId: workCase.id,
+    label: "Bulk",
+    dependsOnIds: [source.id],
+  });
+
+  store.deleteMilestone(source.id);
+
+  const remaining = store.getState().milestones.find((item) => item.id === dependent.id);
+  assert.deepEqual(remaining.dependsOnIds, []);
 });
 
 test("migrates legacy state to schema v6 with conservative origins and checksum", () => {

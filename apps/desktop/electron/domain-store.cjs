@@ -219,6 +219,27 @@ function pendingDecisionKey(value) {
   return "";
 }
 
+function reusableDecisionMatchesCase(decision, workCase) {
+  if (decision?.reuseScope !== "future" || decision?.ruleEnabled !== true) return false;
+  const scope = decision.ruleScope && typeof decision.ruleScope === "object"
+    ? decision.ruleScope
+    : {};
+  const fields = [
+    ["buyerId", "buyerId"],
+    ["buyerName", "buyerName"],
+    ["department", "department"],
+    ["stage", "stage"],
+  ];
+  let constrained = false;
+  for (const [scopeKey, caseKey] of fields) {
+    const expected = normalizeText(scope[scopeKey]);
+    if (!expected) continue;
+    constrained = true;
+    if (expected !== normalizeText(workCase?.[caseKey])) return false;
+  }
+  return constrained;
+}
+
 function cleanOrigin(value, fallback = "system") {
   return FIELD_ORIGINS.has(value) ? value : fallback;
 }
@@ -577,7 +598,8 @@ function createDomainStore(filePath, options = {}) {
     if (buyerId && !businessKeys.some(isBuyerBusinessKey)) {
       businessKeys.unshift({ kind: "buyer", value: buyerId });
     }
-    return {
+    const requestedPendingDecisions = cleanArray(input.pendingDecisions, 100);
+    const workCase = {
       id: id("case"),
       title: cleanText(input.title, "Untitled work case", 240),
       status: CASE_STATUSES.has(input.status) ? input.status : "captured",
@@ -593,11 +615,29 @@ function createDomainStore(filePath, options = {}) {
       summary: cleanText(input.summary, "", 4_000),
       businessKeys,
       evidence: cleanArray(input.evidence, 100),
-      pendingDecisions: cleanArray(input.pendingDecisions, 100),
+      pendingDecisions: requestedPendingDecisions.filter((pendingDecision) => (
+        !state.decisions.some((decision) => (
+          reusableDecisionMatchesCase(decision, {
+            buyerId,
+            buyerName,
+            department: cleanText(input.department || context.department, "", 120),
+            stage: cleanText(input.stage, "", 120),
+          })
+          && pendingDecisionKey(decision.question) === pendingDecisionKey(pendingDecision)
+        ))
+      )),
       fieldOrigins: buildFieldOrigins(input, CASE_PROTECTED_FIELDS, timestamp, origin, originActor),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    if (
+      workCase.status === "blocked"
+      && requestedPendingDecisions.length > 0
+      && workCase.pendingDecisions.length === 0
+    ) {
+      workCase.status = "review";
+    }
+    return workCase;
   };
 
   const buildTask = (input = {}, workCase, timestamp = now(), origin = "manual", originActor = actor) => ({
@@ -856,6 +896,35 @@ function createDomainStore(filePath, options = {}) {
       return this.updateCase(reviewedInput(input));
     },
 
+    deleteCase(caseId) {
+      const previousState = structuredClone(state);
+      const workCase = state.cases.find((item) => item.id === caseId);
+      if (!workCase) throw new Error("삭제할 업무 건을 찾지 못했습니다.");
+      const removed = {
+        tasks: state.tasks.filter((item) => item.caseId === caseId).length,
+        milestones: state.milestones.filter((item) => item.caseId === caseId).length,
+        decisions: state.decisions.filter((item) => item.caseId === caseId).length,
+        artifacts: state.artifactJobs.filter((item) => item.caseId === caseId).length,
+      };
+      try {
+        state.cases = state.cases.filter((item) => item.id !== caseId);
+        state.tasks = state.tasks.filter((item) => item.caseId !== caseId);
+        state.milestones = state.milestones.filter((item) => item.caseId !== caseId);
+        state.decisions = state.decisions.filter((item) => item.caseId !== caseId);
+        state.artifactJobs = state.artifactJobs.filter((item) => item.caseId !== caseId);
+        audit("case.deleted", "workCase", caseId, caseId, {
+          title: workCase.title,
+          removed,
+          sourceFilesPreserved: true,
+        });
+        persist();
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+      return structuredClone({ id: caseId, removed });
+    },
+
     createTask(input = {}) {
       const previousState = structuredClone(state);
       const timestamp = now();
@@ -927,7 +996,12 @@ function createDomainStore(filePath, options = {}) {
             matchingCase.pendingDecisions,
             workCase.pendingDecisions,
             100,
-          );
+          ).filter((pendingDecision) => (
+            !state.decisions.some((decision) => (
+              reusableDecisionMatchesCase(decision, matchingCase)
+              && pendingDecisionKey(decision.question) === pendingDecisionKey(pendingDecision)
+            ))
+          ));
           if (nextPendingDecisions.length !== cleanArray(matchingCase.pendingDecisions, 100).length) {
             fieldAudit[mergeProtectedField(matchingCase, workCase, "pendingDecisions", nextPendingDecisions, timestamp) === "replaced" ? "replacedFields" : "preservedFields"].push("pendingDecisions");
           }
@@ -1002,6 +1076,21 @@ function createDomainStore(filePath, options = {}) {
 
     updateReviewedTask(input = {}) {
       return this.updateTask(reviewedInput(input));
+    },
+
+    deleteTask(taskId) {
+      const previousState = structuredClone(state);
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (!task) throw new Error("삭제할 할 일을 찾지 못했습니다.");
+      try {
+        state.tasks = state.tasks.filter((item) => item.id !== taskId);
+        audit("task.deleted", "task", taskId, task.caseId, { title: task.title });
+        persist();
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+      return structuredClone({ id: taskId, caseId: task.caseId });
     },
 
     createMilestone(input = {}) {
@@ -1091,10 +1180,50 @@ function createDomainStore(filePath, options = {}) {
       return structuredClone(milestone);
     },
 
+    deleteMilestone(milestoneId) {
+      const previousState = structuredClone(state);
+      const milestone = state.milestones.find((item) => item.id === milestoneId);
+      if (!milestone) throw new Error("삭제할 일정을 찾지 못했습니다.");
+      try {
+        state.milestones = state.milestones.filter((item) => item.id !== milestoneId);
+        for (const dependent of state.milestones) {
+          if (!(dependent.dependsOnIds || []).includes(milestoneId)) continue;
+          dependent.dependsOnIds = dependent.dependsOnIds.filter((item) => item !== milestoneId);
+          const dependencyRisk = dependent.dependsOnIds
+            .map((idValue) => state.milestones.find((item) => item.id === idValue))
+            .filter(Boolean)
+            .some((item) => ["at_risk", "late"].includes(item.status));
+          if (!dependencyRisk && dependent.riskReason === "선행 일정이 위험 또는 지연 상태입니다.") {
+            dependent.riskReason = "";
+            if (dependent.status === "at_risk") dependent.status = "planned";
+          }
+          dependent.updatedAt = now();
+        }
+        audit("milestone.deleted", "milestone", milestoneId, milestone.caseId, {
+          label: milestone.label,
+        });
+        persist();
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+      return structuredClone({ id: milestoneId, caseId: milestone.caseId });
+    },
+
     createDecision(input = {}) {
       const previousState = structuredClone(state);
       const timestamp = now();
       const { workCase, created } = resolveItemCase(input, timestamp);
+      const reuseScope = input.reuseScope === "future" ? "future" : "case";
+      const ruleScope = {
+        buyerId: cleanText(workCase.buyerId, "", 120),
+        buyerName: cleanText(workCase.buyerName, "", 120),
+        department: cleanText(workCase.department, "", 120),
+        stage: cleanText(workCase.stage, "", 120),
+      };
+      if (reuseScope === "future" && !ruleScope.buyerId && !ruleScope.buyerName) {
+        throw new Error("앞으로 적용하려면 업무 건에 바이어 정보가 필요합니다.");
+      }
       const decision = {
         id: id("decision"),
         caseId: workCase.id,
@@ -1113,6 +1242,9 @@ function createDomainStore(filePath, options = {}) {
         impactedArtifactIds: state.artifactJobs
           .filter((item) => item.caseId === workCase.id && item.reviewState !== "approved")
           .map((item) => item.id),
+        reuseScope,
+        ruleEnabled: reuseScope === "future",
+        ruleScope,
       };
       try {
         insertCreatedCase(workCase, created);
@@ -1150,18 +1282,53 @@ function createDomainStore(filePath, options = {}) {
       return structuredClone(decision);
     },
 
+    updateDecision(input = {}) {
+      const previousState = structuredClone(state);
+      const decision = state.decisions.find((item) => item.id === input.id);
+      if (!decision) throw new Error("수정할 결정 기록을 찾지 못했습니다.");
+      try {
+        if (input.reuseScope !== undefined) {
+          decision.reuseScope = input.reuseScope === "future" ? "future" : "case";
+          if (decision.reuseScope === "case") decision.ruleEnabled = false;
+        }
+        if (input.ruleEnabled !== undefined && decision.reuseScope === "future") {
+          decision.ruleEnabled = input.ruleEnabled === true;
+        }
+        audit("decision.updated", "decision", decision.id, decision.caseId, {
+          reuseScope: decision.reuseScope || "case",
+          ruleEnabled: decision.ruleEnabled === true,
+        });
+        persist();
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+      return structuredClone(decision);
+    },
+
+    deleteDecision(decisionId) {
+      const previousState = structuredClone(state);
+      const decision = state.decisions.find((item) => item.id === decisionId);
+      if (!decision) throw new Error("삭제할 결정 기록을 찾지 못했습니다.");
+      try {
+        state.decisions = state.decisions.filter((item) => item.id !== decisionId);
+        audit("decision.deleted", "decision", decision.id, decision.caseId, {
+          question: decision.question,
+          reusableRuleRemoved: decision.reuseScope === "future",
+        });
+        persist();
+      } catch (error) {
+        state = previousState;
+        throw error;
+      }
+      return structuredClone({ id: decision.id, caseId: decision.caseId });
+    },
+
     createArtifactJob(input = {}) {
       const previousState = structuredClone(state);
       const timestamp = now();
       const { workCase, created } = resolveItemCase(input, timestamp);
       const artifactType = cleanText(input.type, "document", 80);
-      const requiresResolvedDecisions = true;
-      if (requiresResolvedDecisions && workCase.status === "blocked") {
-        throw new Error("보류 중인 업무 건은 산출물을 등록할 수 없습니다. 보류 사유를 먼저 해제하세요.");
-      }
-      if (requiresResolvedDecisions && hasPendingDecisions(workCase)) {
-        throw new Error("결정 대기 항목을 먼저 확정한 후 산출물을 등록하세요.");
-      }
       if (artifactType === "submit_solid" && indicatesPrintSubmitWorkflow(workCase)) {
         throw new Error("Print·Strike Off·S/O·Screen 근거가 확인되었습니다. Print Submit 양식을 선택하세요.");
       }
@@ -1203,6 +1370,15 @@ function createDomainStore(filePath, options = {}) {
       const artifactJob = state.artifactJobs.find((item) => item.id === input.id);
       if (!artifactJob) {
         throw new Error("Artifact job not found.");
+      }
+      if (input.reviewState === "approved") {
+        const workCase = state.cases.find((item) => item.id === artifactJob.caseId);
+        if (workCase?.status === "blocked") {
+          throw new Error("보류 사유를 해결한 뒤 산출물의 최종 검토를 완료하세요.");
+        }
+        if (hasPendingDecisions(workCase)) {
+          throw new Error("결정 대기 항목을 확정한 뒤 산출물의 최종 검토를 완료하세요.");
+        }
       }
       const before = structuredClone(artifactJob);
       if (input.title !== undefined) {

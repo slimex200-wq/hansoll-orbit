@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { FileOutput, History, ListTodo, Plus, Search } from "lucide-react";
+import { CheckCircle2, FileOutput, History, ListTodo, Plus, Search, Trash2 } from "lucide-react";
 import { Badge, EmptyState, ErrorBanner, PageHeader, Panel } from "../components/UI";
 import { formatDate, presentError } from "../lib";
 import type { DomainState, WorkCase } from "../types";
@@ -18,6 +18,9 @@ export function CasesView({
   const [businessKey, setBusinessKey] = useState("");
   const [owner, setOwner] = useState("");
   const [error, setError] = useState("");
+  const [decisionQuestion, setDecisionQuestion] = useState("");
+  const [decisionOutcome, setDecisionOutcome] = useState("");
+  const [savingDecision, setSavingDecision] = useState(false);
 
   const filtered = state.cases.filter((item) => {
     const haystack = [
@@ -65,6 +68,53 @@ export function CasesView({
       await onStateChanged();
     } catch (caught) {
       setError(presentError(caught, "업무 상태를 변경하지 못했습니다."));
+    }
+  };
+
+  const resolveDecision = async (workCase: WorkCase, question: string) => {
+    if (!decisionOutcome.trim()) return;
+    setError("");
+    setSavingDecision(true);
+    try {
+      await window.opencrab.createDecision({
+        caseId: workCase.id,
+        question,
+        outcome: decisionOutcome.trim(),
+        impactSummary: "사용자가 업무 건 화면에서 직접 확정",
+        releaseCase: true,
+      });
+      setDecisionQuestion("");
+      setDecisionOutcome("");
+      await onStateChanged();
+    } catch (caught) {
+      setError(presentError(caught, "결정을 저장하지 못했습니다."));
+    } finally {
+      setSavingDecision(false);
+    }
+  };
+
+  const deleteCase = async (workCase: WorkCase) => {
+    const counts = `${related.tasks.length}개 할 일, ${related.milestones.length}개 일정, ${related.decisions.length}개 결정, ${related.artifacts.length}개 산출물`;
+    if (!window.confirm(`‘${workCase.title}’ 업무 건과 연결된 ${counts} 기록을 ORBIT에서 삭제할까요?\n\n원본 메일과 파일은 삭제되지 않습니다.`)) return;
+    setError("");
+    try {
+      await window.opencrab.deleteCase(workCase.id);
+      const next = state.cases.find((item) => item.id !== workCase.id);
+      setSelectedId(next?.id ?? "");
+      await onStateChanged();
+    } catch (caught) {
+      setError(presentError(caught, "업무 건을 삭제하지 못했습니다."));
+    }
+  };
+
+  const deleteTask = async (taskId: string, taskTitle: string) => {
+    if (!window.confirm(`‘${taskTitle}’ 할 일을 삭제할까요?`)) return;
+    setError("");
+    try {
+      await window.opencrab.deleteTask(taskId);
+      await onStateChanged();
+    } catch (caught) {
+      setError(presentError(caught, "할 일을 삭제하지 못했습니다."));
     }
   };
 
@@ -174,6 +224,15 @@ export function CasesView({
                       <option value="closed">완료</option>
                       <option value="blocked">보류</option>
                     </select>
+                    <button
+                      aria-label={`${selected.title} 삭제`}
+                      className="icon-button danger-icon-button"
+                      onClick={() => void deleteCase(selected)}
+                      title="업무 건 삭제"
+                      type="button"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   </div>
                 </div>
                 <div className="case-facts">
@@ -195,6 +254,60 @@ export function CasesView({
                   </div>
                 </div>
               </Panel>
+
+              {selected.pendingDecisions.length ? (
+                <Panel className="pending-decision-panel" title={`결정 대기 ${selected.pendingDecisions.length}건`}>
+                  <p className="panel-guidance">
+                    보류를 해제하려면 아래 질문의 결론을 기록하세요. 마지막 결정을 저장하면 업무 건이 검토 상태로 자동 전환됩니다.
+                  </p>
+                  <div className="pending-decision-list">
+                    {selected.pendingDecisions.map((question) => (
+                      <div className="pending-decision-item" key={question}>
+                        <div>
+                          <strong>{question}</strong>
+                          <span>확정한 결론은 결정 기록에 남습니다.</span>
+                        </div>
+                        {decisionQuestion === question ? (
+                          <form
+                            className="pending-decision-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void resolveDecision(selected, question);
+                            }}
+                          >
+                            <textarea
+                              autoFocus
+                              onChange={(event) => setDecisionOutcome(event.target.value)}
+                              placeholder="확정한 결론과 다음 조치를 입력하세요"
+                              required
+                              rows={2}
+                              value={decisionOutcome}
+                            />
+                            <div>
+                              <button className="secondary-button" onClick={() => setDecisionQuestion("")} type="button">취소</button>
+                              <button className="primary-button" disabled={savingDecision} type="submit">
+                                <CheckCircle2 size={15} />
+                                {savingDecision ? "저장 중…" : "결정 확정"}
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <button
+                            className="secondary-button compact"
+                            onClick={() => {
+                              setDecisionQuestion(question);
+                              setDecisionOutcome("");
+                            }}
+                            type="button"
+                          >
+                            결론 입력
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+              ) : null}
 
               <div className="case-counts">
                 <div>
@@ -225,6 +338,15 @@ export function CasesView({
                           <span>{formatDate(item.updatedAt, true)}</span>
                         </div>
                         <Badge value={item.status} />
+                        <button
+                          aria-label={`${item.title} 삭제`}
+                          className="icon-button danger-icon-button"
+                          onClick={() => void deleteTask(item.id, item.title)}
+                          title="할 일 삭제"
+                          type="button"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
                     ))}
                     {related.artifacts.slice(0, 3).map((item) => (

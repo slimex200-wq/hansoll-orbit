@@ -64,6 +64,7 @@ function verifyProductionDirectory() {
   assertFile(resourcesRoot, path.join("runtime", "knowledge", "opencrab_9spaces_grammar.md"));
   assertFile(resourcesRoot, path.join("runtime", "knowledge", "work_agent_quality.schema.json"));
   assertFile(resourcesRoot, path.join("runtime", "knowledge", "work_agent_synthesis.schema.json"));
+  assertFile(resourcesRoot, path.join("runtime", "knowledge", "work_agent_summary_synthesis.schema.json"));
   assertDirectory(resourcesRoot, path.join("runtime", "knowledge", "workbook_layout_specs"));
 
   const asarPath = path.join(resourcesRoot, "app.asar");

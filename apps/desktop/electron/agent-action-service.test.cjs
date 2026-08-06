@@ -55,6 +55,72 @@ test("Agent context exposes whether the synchronized mail source is authoritativ
   });
 });
 
+test("Agent context exposes bounded case and task evidence for ontology recall", () => {
+  const context = buildAgentAppContext({
+    cases: [{
+      id: "case-1",
+      title: "233900002 GAC follow-up",
+      status: "evidence",
+      priority: "high",
+      owner: "Sam",
+      department: "Production",
+      stage: "GAC",
+      summary: "Short shipment reply is pending.",
+      businessKeys: [{ kind: "style", value: "233900002" }],
+      pendingDecisions: ["shortage quantity"],
+      evidence: [{ kind: "mail", title: "GAC 8/4", snippet: "Buyer reply pending" }],
+      updatedAt: "2026-08-05T09:00:00Z",
+    }],
+    tasks: [{
+      id: "task-1",
+      caseId: "case-1",
+      title: "Buyer reply waiting",
+      status: "waiting",
+      source: "GAC 8/4 mail",
+      instruction: "Track the buyer reply.",
+      completionCheck: "Reply received",
+      evidence: ["mail:mail-1"],
+      updatedAt: "2026-08-05T09:00:00Z",
+    }],
+    milestones: [],
+    decisions: [],
+    artifactJobs: [],
+  });
+
+  assert.equal(context.cases[0].summary, "Short shipment reply is pending.");
+  assert.equal(context.cases[0].evidence[0].title, "GAC 8/4");
+  assert.equal(context.tasks[0].source, "GAC 8/4 mail");
+  assert.deepEqual(context.tasks[0].evidence, ["mail:mail-1"]);
+});
+
+test("Agent context exposes enabled reusable decision scope", () => {
+  const context = buildAgentAppContext({
+    cases: [],
+    tasks: [],
+    milestones: [],
+    decisions: [{
+      id: "decision-1",
+      caseId: "case-1",
+      question: "Which source controls submit drafting?",
+      outcome: "Use the latest approved WIP and leave unsupported values TBD.",
+      reuseScope: "future",
+      ruleEnabled: true,
+      ruleScope: {
+        buyerId: "talbots",
+        buyerName: "Talbots",
+        department: "Sales",
+        stage: "Submit",
+      },
+      decidedAt: "2026-08-06T01:00:00Z",
+    }],
+    artifactJobs: [],
+  });
+
+  assert.equal(context.decisions[0].reuse_scope, "future");
+  assert.equal(context.decisions[0].rule_enabled, true);
+  assert.equal(context.decisions[0].rule_scope.buyerName, "Talbots");
+});
+
 test("Agent action review has no side effect before approval and executes once", async () => {
   const { service, store, workCase } = fixture();
   const review = service.prepare([

@@ -617,6 +617,10 @@ class WorkAgentAnswerTests(unittest.TestCase):
         self.assertIn("GAC 10/13/2026", answer["action_plan"][0]["instruction"])
         self.assertNotIn("하세요", str(answer["action_plan"]))
         self.assertIn("정리했습니다", answer["recommendation"]["title"])
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertEqual(len(answer["summary_results"]), 1)
+        self.assertIn("정리 결과:", answer["answer_text"])
+        self.assertNotIn("실행 순서:", answer["answer_text"])
 
 
 if __name__ == "__main__":

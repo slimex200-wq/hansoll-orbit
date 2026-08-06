@@ -109,8 +109,13 @@ def answer_query(
         from .agent_synthesis import apply_missing_target_guardrail
 
         answer = apply_missing_target_guardrail(answer)
+    response_mode = str(answer.get("response_mode") or _response_mode(query))
     if _current_style_work_has_no_evidence(judgment, app_context):
-        answer = _apply_current_work_no_evidence_guardrail(answer, judgment)
+        answer = _apply_current_work_no_evidence_guardrail(
+            answer,
+            judgment,
+            response_mode=response_mode,
+        )
         synthesis["guardrails"] = (
             f"{synthesis.get('guardrails') or ''},current_work_zero_evidence"
         ).strip(",")
@@ -128,10 +133,15 @@ def answer_query(
                 answer,
                 mail_scope,
                 mail_context,
+                response_mode=response_mode,
             )
             guardrail = "scoped_mail_source_unverified"
         else:
-            answer = _apply_scoped_mail_no_hits_guardrail(answer, mail_scope)
+            answer = _apply_scoped_mail_no_hits_guardrail(
+                answer,
+                mail_scope,
+                response_mode=response_mode,
+            )
             guardrail = "scoped_mail_zero_hits"
         synthesis["guardrails"] = (
             f"{synthesis.get('guardrails') or ''},{guardrail}"
@@ -168,6 +178,8 @@ def _current_style_work_has_no_evidence(
 def _apply_current_work_no_evidence_guardrail(
     answer: dict[str, Any],
     judgment: dict[str, Any],
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any]:
     protected = dict(answer)
     classification = judgment.get("classification") or {}
@@ -201,6 +213,12 @@ def _apply_current_work_no_evidence_guardrail(
             "after_confirmation",
         ),
     ]
+    if response_mode == "summary":
+        protected["action_plan"] = []
+        protected["summary_results"] = []
+        protected["recommendation"]["next_move"] = (
+            f"추가 확인이 필요하면 {subject} 최신 Microsoft 365 메일 또는 원본 파일을 연결할 수 있습니다."
+        )
     protected["confirmations"] = [f"{subject} 최신 메일 또는 원본 파일"]
     protected["deliverables"] = []
     protected["app_actions"] = []
@@ -221,6 +239,8 @@ def _apply_scoped_mail_unverified_guardrail(
     answer: dict[str, Any],
     mail_scope: dict[str, Any],
     mail_context: dict[str, Any],
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any]:
     sender = str(mail_scope.get("sender") or "지정 발신자").strip()
     date_label = "오늘" if mail_scope.get("received_after") else "지정 기간"
@@ -252,6 +272,7 @@ def _apply_scoped_mail_unverified_guardrail(
             "task_suggestions": [],
             "confirmations": ["Microsoft 365 원본 메일 연결"],
             "app_actions": [],
+            "summary_results": [],
         }
     )
     return guarded
@@ -260,6 +281,8 @@ def _apply_scoped_mail_unverified_guardrail(
 def _apply_scoped_mail_no_hits_guardrail(
     answer: dict[str, Any],
     mail_scope: dict[str, Any],
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any]:
     sender = str(mail_scope.get("sender") or "지정 발신자").strip()
     date_label = "오늘" if mail_scope.get("received_after") else "지정 기간"
@@ -320,6 +343,13 @@ def _apply_scoped_mail_no_hits_guardrail(
         }
     )
     counts = dict(guarded.get("counts") or {})
+    if response_mode == "summary":
+        guarded["action_plan"] = []
+        guarded["summary_results"] = []
+        guarded["answer_text"] = f"현재 판단: {headline}\n{summary}"
+        guarded["recommendation"]["next_move"] = (
+            "Outlook 원본에 다른 결과가 보이는 경우에만 동기화 후 다시 비교할 수 있습니다."
+        )
     counts["mail"] = 0
     guarded["counts"] = counts
     return guarded
@@ -414,7 +444,11 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         confirmations=confirmations,
         playbook=playbook,
     )
-    task_suggestions = _tasks_from_action_plan(action_plan, query)
+    task_suggestions = (
+        []
+        if response_mode == "summary"
+        else _tasks_from_action_plan(action_plan, query)
+    )
     status = "needs_confirmation" if confirmations else _answer_status(decisions)
     deliverables = _build_deliverables(
         query,
@@ -426,8 +460,12 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     answer_text_parts = [
         f"현재 판단: {recommendation['title']}",
         recommendation["conclusion"],
-        "실행 순서: " + " / ".join(item["title"] for item in action_plan),
     ]
+    if action_plan:
+        label = "정리 결과" if response_mode == "summary" else "실행 순서"
+        answer_text_parts.append(
+            f"{label}: " + " / ".join(item["title"] for item in action_plan)
+        )
     if confirmations:
         answer_text_parts.append("확인 필요: " + " / ".join(confirmations))
 
@@ -444,6 +482,20 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         "answer_text": "\n".join(answer_text_parts),
         "recommendation": recommendation,
         "action_plan": action_plan,
+        "summary_results": (
+            [
+                {
+                    "title": item["title"],
+                    "status": item["state"],
+                    "detail": item["instruction"],
+                    "evidence": item["completion_check"],
+                    "remaining_unknown": "",
+                }
+                for item in action_plan
+            ]
+            if response_mode == "summary"
+            else []
+        ),
         "concept": concept,
         "concept_label": concept_label,
         "confidence": confidence,
@@ -460,6 +512,12 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
 def _response_mode(query: str) -> str:
     """Distinguish a requested status digest from an instruction request."""
     normalized = " ".join(str(query or "").split())
+    if re.search(
+        r"(할\s*일|해야\s*할|액션|실행|처리|초안|작성|만들어\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "action"
     if re.search(r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)", normalized, re.IGNORECASE):
         return "summary"
     return "action"

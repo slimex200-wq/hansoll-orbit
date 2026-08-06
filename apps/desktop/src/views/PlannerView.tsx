@@ -9,6 +9,7 @@ import {
   Clock3,
   ListTodo,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { MotionNumber } from "../components/Motion";
 import { CaseSelect, EmptyState, ErrorBanner, PageHeader, Panel } from "../components/UI";
@@ -108,6 +109,7 @@ export function PlannerView({
   const [dependsOnId, setDependsOnId] = useState("");
   const [taskFilter, setTaskFilter] = useState<"all" | TaskStatus>("all");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const entries = useMemo<PlannerEntry[]>(() => {
     const tasks = state.tasks.flatMap((task) => {
@@ -220,8 +222,34 @@ export function PlannerView({
     try {
       await window.opencrab.updateTask({ id: task.id, status });
       await onStateChanged();
+      setTaskFilter(status);
+      setNotice(`‘${task.title}’을(를) ${statusLabel(status)} 칸으로 이동했습니다.`);
     } catch (caught) {
       setError(presentError(caught, "할 일 상태를 변경하지 못했습니다."));
+    }
+  };
+
+  const deleteTask = async (task: WorkTask) => {
+    if (!window.confirm(`‘${task.title}’ 할 일을 삭제할까요?`)) return;
+    setError("");
+    setNotice("");
+    try {
+      await window.opencrab.deleteTask(task.id);
+      await onStateChanged();
+    } catch (caught) {
+      setError(presentError(caught, "할 일을 삭제하지 못했습니다."));
+    }
+  };
+
+  const deleteMilestone = async (milestone: Milestone) => {
+    if (!window.confirm(`‘${milestone.label}’ 일정을 삭제할까요? 연결된 후속 일정의 선행 관계도 함께 정리됩니다.`)) return;
+    setError("");
+    setNotice("");
+    try {
+      await window.opencrab.deleteMilestone(milestone.id);
+      await onStateChanged();
+    } catch (caught) {
+      setError(presentError(caught, "일정을 삭제하지 못했습니다."));
     }
   };
 
@@ -278,6 +306,7 @@ export function PlannerView({
       </div>
 
       {error ? <ErrorBanner message={error} /> : null}
+      {notice ? <div className="planner-move-notice" role="status"><CircleCheck size={16} />{notice}</div> : null}
       {createKind ? (
         <Panel title={createKind === "task" ? "새 할 일" : "새 일정"}>
           {createKind === "task" ? (
@@ -334,6 +363,8 @@ export function PlannerView({
       {mode === "list" ? (
         <PlannerList
           milestones={state.milestones}
+          onDeleteMilestone={deleteMilestone}
+          onDeleteTask={deleteTask}
           onMilestoneStatus={updateMilestone}
           onTaskStatus={updateTask}
           state={state}
@@ -345,6 +376,8 @@ export function PlannerView({
         <MonthCalendar
           cursor={cursor}
           entriesByDay={entriesByDay}
+          onDeleteMilestone={deleteMilestone}
+          onDeleteTask={deleteTask}
           onMilestoneStatus={updateMilestone}
           onSelectDate={setSelectedDate}
           onTaskStatus={updateTask}
@@ -377,8 +410,10 @@ function ModeButton({ active, icon: Icon, label, onClick }: { active: boolean; i
   return <button aria-selected={active} className={active ? "active" : ""} onClick={onClick} role="tab" type="button"><Icon size={15} />{label}</button>;
 }
 
-function PlannerList({ milestones, onMilestoneStatus, onTaskFilter, onTaskStatus, state, taskFilter, tasks }: {
+function PlannerList({ milestones, onDeleteMilestone, onDeleteTask, onMilestoneStatus, onTaskFilter, onTaskStatus, state, taskFilter, tasks }: {
   milestones: Milestone[];
+  onDeleteMilestone(item: Milestone): Promise<void>;
+  onDeleteTask(item: WorkTask): Promise<void>;
   onMilestoneStatus(item: Milestone, status: Milestone["status"]): Promise<void>;
   onTaskFilter(status: "all" | TaskStatus): void;
   onTaskStatus(item: WorkTask, status: TaskStatus): Promise<void>;
@@ -390,7 +425,10 @@ function PlannerList({ milestones, onMilestoneStatus, onTaskFilter, onTaskStatus
   return <div className="planner-list-layout">
     <Panel className="planner-task-panel" title="할 일">
       <div className="planner-filter-row">
-        {taskFilters.map(([id, label]) => <button aria-pressed={taskFilter === id} className={taskFilter === id ? "active" : ""} key={id} onClick={() => onTaskFilter(id)} type="button">{label}</button>)}
+        {taskFilters.map(([id, label]) => {
+          const count = id === "all" ? state.tasks.length : state.tasks.filter((task) => task.status === id).length;
+          return <button aria-pressed={taskFilter === id} className={taskFilter === id ? "active" : ""} key={id} onClick={() => onTaskFilter(id)} type="button">{label}<span>{count}</span></button>;
+        })}
       </div>
       {tasks.length ? <div className="planner-item-list">
         {tasks.map((task) => <div className="planner-list-item" key={task.id}>
@@ -400,6 +438,7 @@ function PlannerList({ milestones, onMilestoneStatus, onTaskFilter, onTaskStatus
           <select aria-label={`${task.title} 상태`} onChange={(event) => void onTaskStatus(task, event.target.value as TaskStatus)} value={task.status}>
             <option value="todo">할 일</option><option value="in_progress">진행</option><option value="waiting">회신 대기</option><option value="chase">재촉 필요</option><option value="blocked">보류</option><option value="done">완료</option>
           </select>
+          <button aria-label={`${task.title} 삭제`} className="icon-button danger-icon-button" onClick={() => void onDeleteTask(task)} title="할 일 삭제" type="button"><Trash2 size={15} /></button>
         </div>)}
       </div> : <EmptyState title="해당 상태의 할 일이 없습니다" />}
     </Panel>
@@ -412,15 +451,18 @@ function PlannerList({ milestones, onMilestoneStatus, onTaskFilter, onTaskStatus
           <select aria-label={`${item.label} 일정 상태`} onChange={(event) => void onMilestoneStatus(item, event.target.value as Milestone["status"])} value={item.status}>
             <option value="planned">예정</option><option value="at_risk">위험</option><option value="late">지연</option><option value="done">완료</option>
           </select>
+          <button aria-label={`${item.label} 삭제`} className="icon-button danger-icon-button" onClick={() => void onDeleteMilestone(item)} title="일정 삭제" type="button"><Trash2 size={15} /></button>
         </div>)}
       </div> : <EmptyState title="등록된 일정이 없습니다" />}
     </Panel>
   </div>;
 }
 
-function MonthCalendar({ cursor, entriesByDay, onMilestoneStatus, onSelectDate, onTaskStatus, selectedDate, selectedEntries, state, today }: {
+function MonthCalendar({ cursor, entriesByDay, onDeleteMilestone, onDeleteTask, onMilestoneStatus, onSelectDate, onTaskStatus, selectedDate, selectedEntries, state, today }: {
   cursor: Date;
   entriesByDay: Map<string, PlannerEntry[]>;
+  onDeleteMilestone(item: Milestone): Promise<void>;
+  onDeleteTask(item: WorkTask): Promise<void>;
   onMilestoneStatus(item: Milestone, status: Milestone["status"]): Promise<void>;
   onSelectDate(value: string): void;
   onTaskStatus(item: WorkTask, status: TaskStatus): Promise<void>;
@@ -457,6 +499,8 @@ function MonthCalendar({ cursor, entriesByDay, onMilestoneStatus, onSelectDate, 
             <div><strong>{entry.title}</strong><span>{caseTitle(state, entry.caseId)}{entry.owner ? ` · ${entry.owner}` : ""}</span></div>
             {task ? <select aria-label={`${task.title} 상태`} onChange={(event) => void onTaskStatus(task, event.target.value as TaskStatus)} value={task.status}><option value="todo">할 일</option><option value="in_progress">진행</option><option value="waiting">회신 대기</option><option value="chase">재촉 필요</option><option value="blocked">보류</option><option value="done">완료</option></select> : null}
             {milestone ? <select aria-label={`${milestone.label} 일정 상태`} onChange={(event) => void onMilestoneStatus(milestone, event.target.value as Milestone["status"])} value={milestone.status}><option value="planned">예정</option><option value="at_risk">위험</option><option value="late">지연</option><option value="done">완료</option></select> : null}
+            {task ? <button aria-label={`${task.title} 삭제`} className="icon-button danger-icon-button" onClick={() => void onDeleteTask(task)} title="할 일 삭제" type="button"><Trash2 size={15} /></button> : null}
+            {milestone ? <button aria-label={`${milestone.label} 삭제`} className="icon-button danger-icon-button" onClick={() => void onDeleteMilestone(milestone)} title="일정 삭제" type="button"><Trash2 size={15} /></button> : null}
           </div>;
         })}
       </div> : <EmptyState title="선택한 날짜에 등록된 업무가 없습니다" />}

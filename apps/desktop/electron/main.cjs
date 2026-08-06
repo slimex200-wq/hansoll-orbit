@@ -1015,11 +1015,16 @@ function registerIpc() {
     store.createCaseWithTasks(input),
   );
   handle("domain:update-case", (_event, input) => store.updateCase(input));
+  handle("domain:delete-case", (_event, id) => store.deleteCase(id));
   handle("domain:create-task", (_event, input) => store.createTask(input));
   handle("domain:update-task", (_event, input) => store.updateTask(input));
+  handle("domain:delete-task", (_event, id) => store.deleteTask(id));
   handle("domain:create-milestone", (_event, input) => store.createMilestone(input));
   handle("domain:update-milestone", (_event, input) => store.updateMilestone(input));
+  handle("domain:delete-milestone", (_event, id) => store.deleteMilestone(id));
   handle("domain:create-decision", (_event, input) => store.createDecision(input));
+  handle("domain:update-decision", (_event, input) => store.updateDecision(input));
+  handle("domain:delete-decision", (_event, id) => store.deleteDecision(id));
   handle("domain:create-artifact-job", (_event, input = {}) => createArtifactJob(input));
   handle("microsoft:get-status", () => microsoftMail.getStatus());
   handle("microsoft:sign-in", () => microsoftMail.signIn());

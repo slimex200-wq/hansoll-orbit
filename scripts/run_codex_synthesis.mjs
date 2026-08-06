@@ -43,18 +43,19 @@ const child = spawn(
     'approval_policy="never"',
     "-c",
     `model_reasoning_effort="${reasoningEffort}"`,
-    prompt.toString("utf8"),
+    "-",
   ],
   {
     env: { ...process.env, CODEX_HOME: codexHome },
     shell: false,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   },
 );
 
 child.stdout.pipe(process.stdout);
 child.stderr.pipe(process.stderr);
+child.stdin.end(prompt);
 child.once("error", (error) => {
   process.stderr.write(`${error.message}\n`);
   process.exit(1);

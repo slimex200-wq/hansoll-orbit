@@ -95,6 +95,14 @@ export interface Decision {
   decidedAt: string;
   impactedTaskIds?: string[];
   impactedArtifactIds?: string[];
+  reuseScope?: "case" | "future";
+  ruleEnabled?: boolean;
+  ruleScope?: {
+    buyerId?: string;
+    buyerName?: string;
+    department?: string;
+    stage?: string;
+  };
 }
 
 export interface ArtifactJob {
@@ -391,6 +399,13 @@ export interface AgentAnswer {
   answer_text: string;
   recommendation: AgentRecommendation;
   action_plan: AgentActionStep[];
+  summary_results?: Array<{
+    title: string;
+    status: string;
+    detail: string;
+    evidence: string;
+    remaining_unknown: string;
+  }>;
   concept: string;
   concept_label: string;
   confidence: string;
@@ -621,24 +636,30 @@ export interface DesktopApi {
     tasks: Array<Partial<WorkTask> & { title: string }>;
   }): Promise<{ workCase: WorkCase; tasks: WorkTask[]; merged?: boolean }>;
   updateCase(input: Partial<WorkCase> & { id: string }): Promise<WorkCase>;
+  deleteCase(id: string): Promise<{ id: string; removed: Record<string, number> }>;
   createTask(input: Partial<WorkTask> & {
     caseId?: string;
     workCase?: Partial<WorkCase>;
     title: string;
   }): Promise<WorkTask>;
   updateTask(input: Partial<WorkTask> & { id: string }): Promise<WorkTask>;
+  deleteTask(id: string): Promise<{ id: string; caseId: string }>;
   createMilestone(
     input: Partial<Milestone> & { caseId?: string; workCase?: Partial<WorkCase>; label: string },
   ): Promise<Milestone>;
   updateMilestone(input: Partial<Milestone> & { id: string }): Promise<Milestone>;
+  deleteMilestone(id: string): Promise<{ id: string; caseId: string }>;
   createDecision(
     input: Partial<Decision> & {
       caseId?: string;
       workCase?: Partial<WorkCase>;
       outcome: string;
       releaseCase?: boolean;
+      reuseScope?: "case" | "future";
     },
   ): Promise<Decision>;
+  updateDecision(input: { id: string; reuseScope?: "case" | "future"; ruleEnabled?: boolean }): Promise<Decision>;
+  deleteDecision(id: string): Promise<{ id: string; caseId: string }>;
   createArtifactJob(
     input: Partial<ArtifactJob> & {
       caseId?: string;

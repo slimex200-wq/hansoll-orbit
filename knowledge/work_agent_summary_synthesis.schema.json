@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 1200
+    },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["ready", "review_required", "confirmation_required", "source_required", "blocked"]
+        },
+        "title": { "type": "string", "minLength": 8, "maxLength": 120 },
+        "conclusion": { "type": "string", "minLength": 20, "maxLength": 900 },
+        "next_move": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["state", "title", "conclusion", "next_move"]
+    },
+    "results": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+          "status": { "type": "string", "minLength": 2, "maxLength": 80 },
+          "detail": { "type": "string", "minLength": 10, "maxLength": 700 },
+          "evidence": { "type": "string", "minLength": 3, "maxLength": 400 },
+          "remaining_unknown": { "type": "string", "maxLength": 300 }
+        },
+        "required": ["title", "status", "detail", "evidence", "remaining_unknown"]
+      }
+    },
+    "confirmations": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "type": "string", "minLength": 5, "maxLength": 240 }
+    },
+    "app_actions": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "create_case", "update_case", "create_task", "update_task",
+              "create_milestone", "update_milestone", "record_decision",
+              "create_artifact", "update_artifact", "copy_artifact",
+              "validate_artifact", "sync_outlook", "initialize_indexes",
+              "refresh_folder", "remove_folder", "open_source", "show_in_folder"
+            ]
+          },
+          "label": { "type": "string", "minLength": 3, "maxLength": 120 },
+          "reason": { "type": "string", "minLength": 8, "maxLength": 300 },
+          "target_id": { "type": "string", "maxLength": 240 },
+          "case_id": { "type": "string", "maxLength": 240 },
+          "input_json": { "type": "string", "minLength": 2, "maxLength": 6000 }
+        },
+        "required": ["type", "label", "reason", "target_id", "case_id", "input_json"]
+      }
+    }
+  },
+  "required": ["summary", "recommendation", "results", "confirmations", "app_actions"]
+}
