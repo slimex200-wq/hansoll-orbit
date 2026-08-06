@@ -203,7 +203,8 @@ try {
   await window.getByLabel("업무 건", { exact: true }).selectOption("");
   await window.getByLabel("새 업무 건 이름").fill("271900030 Submit 인수인계");
   await window.getByPlaceholder("판단이 필요했던 항목").fill("다음 Submit 담당자");
-  await window.getByLabel("결정", { exact: true }).fill("Development 담당자가 다음 Submit을 진행합니다.");
+  await window.getByLabel("결론", { exact: true }).fill("Development 담당자가 다음 Submit을 진행합니다.");
+  await window.getByText("근거·인수인계 추가", { exact: false }).click();
   await window.getByLabel("채택한 근거").fill("최신 메일의 담당자 지정");
   await window.getByLabel("영향·인수인계").fill("Development 담당자가 다음 Submit 일정과 산출물을 이어서 처리");
   await window.getByRole("button", { name: "기록 저장", exact: true }).click();
