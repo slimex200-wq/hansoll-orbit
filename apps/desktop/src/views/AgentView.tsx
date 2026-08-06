@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileOutput,
   FileSearch,
+  LoaderCircle,
   Mail,
   Play,
   RefreshCw,
@@ -162,6 +163,8 @@ export function AgentView({
   const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [mailRefreshing, setMailRefreshing] = useState(false);
   const [modelChanging, setModelChanging] = useState(false);
+  const [pendingModel, setPendingModel] =
+    useState<{ label: string; profile: string } | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectedActionIds, setSelectedActionIds] = useState<string[]>([]);
   const [executingActions, setExecutingActions] = useState(false);
@@ -209,6 +212,7 @@ export function AgentView({
     request: string,
     options: { fromSavedMail?: boolean } = {},
   ) => {
+    if (modelChanging) return;
     setSubmittedQuery(request);
     setResult(null);
     setLoading(true);
@@ -242,6 +246,10 @@ export function AgentView({
     setModelMenuOpen(false);
     const [providerId, model] = value.split("::") as [AgentProviderId, string];
     if (!providerId || !model || modelChanging || loading) return;
+    const target = agentStatus?.providers
+      .find((provider) => provider.id === providerId)
+      ?.model_options?.find((option) => option.id === model);
+    setPendingModel({ label: target?.label ?? model, profile: target?.profile ?? "균형" });
     setModelChanging(true);
     setError("");
     try {
@@ -250,13 +258,14 @@ export function AgentView({
       setError(agentErrorMessage(caught, "답변 모델을 변경하지 못했습니다."));
     } finally {
       setModelChanging(false);
+      setPendingModel(null);
     }
   };
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const request = query.trim();
-    if (!request || loading) return;
+    if (!request || loading || modelChanging) return;
     setQuery("");
     if (microsoft?.syncState === "syncing" && requiresFreshMail(request)) {
       resumeAfterMailSyncRef.current = true;
@@ -461,20 +470,24 @@ export function AgentView({
   const runtimeNotice = fallbackNotice(result?.synthesis.fallback_reason);
   const answerUsedFallback = result?.synthesis.mode === "deterministic";
   const displayedEngineReady = agentStatus?.mode === "model_ready" && !answerUsedFallback;
-  const displayedEngineLabel = answerUsedFallback
-    ? "이번 답변 규칙 기반"
-    : agentStatus?.mode === "model_ready"
-      ? `${agentStatus.model} 연결`
-      : "규칙 기반 답변";
+  const displayedEngineLabel = modelChanging
+    ? "모델 전환 중"
+    : answerUsedFallback
+      ? "이번 답변 규칙 기반"
+      : agentStatus?.mode === "model_ready"
+        ? `${agentStatus.model} 연결`
+        : "규칙 기반 답변";
   const selectedProvider = agentStatus?.providers.find(
     (provider) => provider.id === agentStatus.selected_provider,
   );
   const selectedModel = selectedProvider?.model_options?.find(
     (model) => model.id === agentStatus?.model,
   );
-  const selectedModelLabel = agentStatus
-    ? `${selectedModel?.label ?? agentStatus.model} · ${selectedModel?.profile ?? "균형"}`
-    : "모델 확인 중";
+  const selectedModelLabel = pendingModel
+    ? `${pendingModel.label} · 전환 중`
+    : agentStatus
+      ? `${selectedModel?.label ?? agentStatus.model} · ${selectedModel?.profile ?? "균형"}`
+      : "모델 확인 중";
   const modelPickerDisabled = modelChanging || loading || !agentStatus;
   const resultMailIsStale = Boolean(
     result?.judgment.evidence_summary.mail_index?.db_may_be_stale,
@@ -491,6 +504,8 @@ export function AgentView({
           <div>
             <strong>Work Agent</strong>
             <span
+              aria-busy={modelChanging}
+              aria-live="polite"
               className={`agent-engine-status ${
                 displayedEngineReady ? "connected" : "fallback"
               }`}
@@ -508,14 +523,19 @@ export function AgentView({
               aria-expanded={modelMenuOpen}
               aria-haspopup="listbox"
               aria-label="답변 모델"
+              aria-busy={modelChanging}
               className="agent-model-trigger"
               disabled={modelPickerDisabled}
               onClick={() => setModelMenuOpen((current) => !current)}
-              title="Work Agent 답변 모델"
+              title={modelChanging ? "답변 모델 연결을 확인하는 중" : "Work Agent 답변 모델"}
               type="button"
             >
               <span>{selectedModelLabel}</span>
-              <ChevronDown aria-hidden="true" size={14} />
+              {modelChanging ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={14} />
+              ) : (
+                <ChevronDown aria-hidden="true" size={14} />
+              )}
             </button>
             {modelMenuOpen && agentStatus ? (
               <div
@@ -1096,8 +1116,8 @@ export function AgentView({
         <button
           aria-label="Work Agent 실행"
           className="primary-button"
-          disabled={loading || !query.trim()}
-          title="답변 받기"
+          disabled={loading || modelChanging || !query.trim()}
+          title={modelChanging ? "모델 전환이 끝나면 답변할 수 있습니다" : "답변 받기"}
           type="submit"
         >
           <Send size={17} />

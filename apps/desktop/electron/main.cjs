@@ -897,9 +897,16 @@ function registerIpc() {
   handle("opencrab:index-status", () => structuredClone(businessIndexStatus));
   handle("opencrab:initialize-indexes", () => initializeBusinessIndexes());
   handle("opencrab:agent-status", () => agentProviders.getStatus());
-  handle("opencrab:agent-provider-select", (_event, input = {}) =>
-    agentProviders.select(String(input.providerId || ""), String(input.model || "") || undefined),
-  );
+  handle("opencrab:agent-provider-select", async (_event, input = {}) => {
+    const delayMs = deterministicTestMode
+      ? Number.parseInt(process.env.OPENCRAB_E2E_MODEL_SELECT_DELAY_MS || "0", 10)
+      : 0;
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return agentProviders.select(
+      String(input.providerId || ""),
+      String(input.model || "") || undefined,
+    );
+  });
   handle("opencrab:agent-provider-connect", (_event, providerId) =>
     agentProviders.connect(String(providerId || "")),
   );

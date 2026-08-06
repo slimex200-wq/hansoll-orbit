@@ -698,6 +698,17 @@ textarea::placeholder {
   opacity: 0.68;
 }
 
+.agent-model-trigger[aria-busy="true"] {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--border));
+  opacity: 1;
+}
+
+.agent-model-trigger[aria-busy="true"] svg {
+  color: var(--amber);
+}
+
 .agent-model-menu {
   position: absolute;
   z-index: 40;
@@ -810,6 +821,23 @@ textarea::placeholder {
 
 .agent-engine-status.connected i {
   background: #45a96e;
+}
+
+.agent-engine-status[aria-busy="true"] i {
+  background: var(--amber);
+  animation: agent-status-pulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes agent-status-pulse {
+  from {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .agent-panel-mark {

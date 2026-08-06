@@ -33,6 +33,7 @@ const application = await electron.launch({
   env: {
     ...process.env,
     OPENCRAB_E2E_MODE: "1",
+    OPENCRAB_E2E_MODEL_SELECT_DELAY_MS: "1200",
     OPENCRAB_DESKTOP_CONFIG_PATH: path.join(userDataDirectory, "no-microsoft-config.json"),
   },
 });
@@ -537,6 +538,25 @@ try {
   });
   if (await enabledAlternatives.count()) {
     await enabledAlternatives.first().click();
+    await agentPanel.getByText("모델 전환 중", { exact: true }).waitFor();
+    assert.equal(await modelSelect.getAttribute("aria-busy"), "true");
+    assert.equal(
+      await agentPanel.locator(".agent-model-trigger .spin").count(),
+      1,
+      "Model switching does not expose a visible progress indicator.",
+    );
+    const composerDuringModelSwitch = agentPanel.getByLabel("Work Agent 요청");
+    await composerDuringModelSwitch.fill("모델 전환 중 입력 유지 확인");
+    assert.equal(
+      await composerDuringModelSwitch.inputValue(),
+      "모델 전환 중 입력 유지 확인",
+      "The Agent composer becomes unresponsive while a model is switching.",
+    );
+    await composerDuringModelSwitch.fill("");
+    await window.screenshot({
+      path: path.join(outputDirectory, "02a-agent-model-switching.png"),
+      fullPage: true,
+    });
     await window.waitForFunction(async (initial) => {
       const status = await window.opencrab.getAgentStatus();
       return (
