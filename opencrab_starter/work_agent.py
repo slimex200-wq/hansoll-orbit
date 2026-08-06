@@ -327,6 +327,7 @@ def _apply_scoped_mail_no_hits_guardrail(
 
 def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     query = str(judgment.get("query") or "").strip()
+    response_mode = _response_mode(query)
     classification = judgment.get("classification") or {}
     evidence = judgment.get("evidence_summary") or {}
     decisions = judgment.get("decisions") or {}
@@ -439,6 +440,7 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "headline": headline,
         "summary": summary,
+        "response_mode": response_mode,
         "answer_text": "\n".join(answer_text_parts),
         "recommendation": recommendation,
         "action_plan": action_plan,
@@ -453,6 +455,14 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         "deliverables": deliverables,
         "app_actions": [],
     }
+
+
+def _response_mode(query: str) -> str:
+    """Distinguish a requested status digest from an instruction request."""
+    normalized = " ".join(str(query or "").split())
+    if re.search(r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)", normalized, re.IGNORECASE):
+        return "summary"
+    return "action"
 
 
 def _build_case_headline(
@@ -674,11 +684,19 @@ def _build_recommendation(
     if concept == "wip_update":
         return {
             "state": "active_wip_review",
-            "title": f"{subject}의 GAC·지연 후보를 우선순위로 정리해야 합니다.",
-            "conclusion": _portfolio_wip_summary(style_hits),
+            "title": "이번 주 GAC 지연 위험과 회신 대기 후보를 정리했습니다.",
+            "conclusion": (
+                f"{_portfolio_wip_summary(style_hits)} "
+                + (
+                    f"회신 대기 후보는 {_display_date(latest_mail.get('received'))} "
+                    f"'{latest_mail.get('subject') or '제목 없음'}' 메일입니다."
+                    if latest_mail
+                    else "현재 검색 결과에는 회신 대기를 판정할 메일이 없습니다."
+                )
+            ),
             "next_move": (
-                "기한 경과, 이번 주 마감, 회신 대기 순으로 활성 WIP와 메일을 대조하고 "
-                "담당자·다음 Chase 날짜를 확정합니다."
+                "아래 후보별 근거와 TBD를 먼저 검토하면 되며, 원본 확인이 필요한 값만 "
+                "추가 확인 항목에 남겨 두었습니다."
             ),
         }
 
@@ -851,29 +869,7 @@ def _build_action_plan(
         ]
 
     if concept == "wip_update":
-        return [
-            _action_step(
-                1,
-                "기한 경과·이번 주 GAC 후보 분리",
-                "검색 결과를 활성 WIP와 대조해 완료 건을 제외하고 실제 위험 건만 남깁니다.",
-                "위험 Style, GAC와 현재 상태 목록 확정",
-                "do_now",
-            ),
-            _action_step(
-                2,
-                "회신 대기와 담당자 확인",
-                "최신 메일의 마지막 발신자와 회신 여부를 확인해 Waiting·Chase Needed를 구분합니다.",
-                "각 건의 담당자와 다음 Chase 날짜 기록",
-                "do_now",
-            ),
-            _action_step(
-                3,
-                "WIP와 할 일 업데이트",
-                "확정된 상태, 문제점과 다음 행동만 반영하고 근거 메일을 연결합니다.",
-                "중복 없이 업무 건과 할 일 저장",
-                "do_now",
-            ),
-        ]
+        return _wip_result_rows(style_hits, latest_mail)
 
     if concept == "mail_followup":
         return [
@@ -929,6 +925,71 @@ def _action_step(
         "completion_check": completion_check,
         "state": state,
     }
+
+
+def _wip_result_rows(
+    style_hits: list[dict[str, Any]],
+    latest_mail: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Represent a WIP digest as classified findings, not delegated research steps."""
+    rows: list[dict[str, Any]] = []
+    for item in style_hits[:3]:
+        style_no = str(item.get("style_no") or item.get("style") or "Style 미상")
+        source = PurePath(
+            str(item.get("relative_path") or item.get("source_path") or "WIP 원본")
+        ).name
+        location = str(item.get("location") or item.get("sheet_name") or "").strip()
+        raw = " ".join(
+            str(item.get(key) or "") for key in ("snippet", "raw_compact", "gac_date")
+        )
+        gac_match = re.search(
+            r"\bGAC\s*[=:]?\s*(\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+            raw,
+            re.IGNORECASE,
+        )
+        gac = gac_match.group(1) if gac_match else "날짜 TBD"
+        classification = "GAC 위험 후보" if gac_match else "WIP 검토 후보"
+        place = f" · {location}" if location else ""
+        rows.append(
+            _action_step(
+                len(rows) + 1,
+                f"{style_no} · {classification}",
+                f"{source}{place}가 검색 후보로 확인됐습니다. GAC {gac}, 완료 제외 여부와 현재 진행 상태는 원본 확인 전 TBD입니다.",
+                f"근거: {source}{place}; 확인 필요: 완료 여부·현재 상태",
+                "needs_confirmation",
+            )
+        )
+    if latest_mail and len(rows) < 5:
+        mail_subject = " ".join(str(latest_mail.get("subject") or "제목 없음").split())
+        sender = str(latest_mail.get("sender") or "발신자 미상")
+        received = _display_date(latest_mail.get("received"))
+        rows.append(
+            _action_step(
+                len(rows) + 1,
+                "회신 대기·Chase 판정 후보",
+                f"{received} {sender}의 '{mail_subject}' 메일이 최신 관련 흐름입니다. 마지막 발신자 이후 당사 회신 여부는 현재 캐시만으로 확정되지 않았습니다.",
+                f"근거: {received} '{mail_subject}'; 확인 필요: 마지막 회신 주체·다음 Chase 일자",
+                "needs_confirmation",
+            )
+        )
+    if not rows:
+        return [
+            _action_step(
+                1,
+                "GAC 지연 위험 · 판정 자료 없음",
+                "현재 검색 결과에는 Style별 GAC와 활성 상태를 함께 보여 주는 근거가 없습니다.",
+                "필요 근거: 활성 WIP의 Style·GAC·현재 상태",
+                "blocked",
+            ),
+            _action_step(
+                2,
+                "회신 대기 · 판정 자료 없음",
+                "현재 검색 결과에는 마지막 발신자와 미회신 여부를 판단할 관련 메일이 없습니다.",
+                "필요 근거: 관련 메일의 최신 thread와 마지막 발신자",
+                "blocked",
+            ),
+        ]
+    return rows
 
 
 def _tasks_from_action_plan(

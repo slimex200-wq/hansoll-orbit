@@ -610,14 +610,13 @@ class WorkAgentAnswerTests(unittest.TestCase):
         answer = compose_answer(judgment)
 
         self.assertEqual(answer["status"], "needs_review")
+        self.assertEqual(answer["response_mode"], "summary")
         self.assertNotIn("확인할 Style 번호", answer["confirmations"])
         self.assertIn("현재 검색 상위 행의 GAC 1건", answer["summary"])
-        self.assertTrue(
-            any(
-                "기한 경과·이번 주 GAC 후보 분리" in item["title"]
-                for item in answer["task_suggestions"]
-            )
-        )
+        self.assertEqual(answer["action_plan"][0]["title"], "254730065 · GAC 위험 후보")
+        self.assertIn("GAC 10/13/2026", answer["action_plan"][0]["instruction"])
+        self.assertNotIn("하세요", str(answer["action_plan"]))
+        self.assertIn("정리했습니다", answer["recommendation"]["title"])
 
 
 if __name__ == "__main__":

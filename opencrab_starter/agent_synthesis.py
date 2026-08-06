@@ -220,7 +220,10 @@ def synthesize_answer(
         selected_timeout,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
-    validated = validate_synthesis(raw)
+    validated = validate_synthesis(
+        raw,
+        response_mode=str(packet.get("response_mode") or "action"),
+    )
     _write_cache(cache_key, selected_provider, selected_model, validated)
     answer = merge_synthesis(draft, validated)
     if packet.get("target_missing"):
@@ -256,6 +259,7 @@ def build_evidence_packet(
     )
     packet = {
         "query": _clean_text(judgment.get("query"), 2_000),
+        "response_mode": _response_mode(str(judgment.get("query") or "")),
         "classification": _copy_fields(
             classification,
             ["styles", "primary_concept", "secondary_concepts", "mail_scope"],
@@ -452,12 +456,34 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
             "No buyer has been confirmed. Do not assume Talbots/MGF terminology, workflow, "
             "approval stages, or templates. Ask for the buyer only when it is required to act.\n\n"
         )
+    response_mode = str(
+        packet.get("response_mode")
+        or _response_mode(str(packet.get("query") or ""))
+    )
+    response_contract = (
+        "This is a summary/status request. The operator must perform the classification and "
+        "return the result now; never delegate source inspection or classification back to the "
+        "user. Use action_plan as 2 to 5 ranked result rows: each title is a descriptive status "
+        "label, each instruction states the finding and why, and completion_check states the "
+        "supporting source plus only the remaining TBD. Do not use imperative Korean endings "
+        "such as '~하세요', '~확인하세요', or '~분리하세요'. If evidence is incomplete, still "
+        "list source-backed candidates with Candidate/TBD/Waiting/Chase Needed status, then put "
+        "only the minimum source limitation in confirmations. recommendation.next_move is a "
+        "short optional follow-up, never the main answer.\n\n"
+        if response_mode == "summary"
+        else (
+            "This is an action request. Rank actions in actual execution order. Use concise "
+            "imperative titles and include the specific Style, stage, source, field, recipient "
+            "role, or artifact affected.\n\n"
+        )
+    )
     return (
         operator_role
         + "Use only the "
         "evidence packet below to make an operator decision in concise, natural Korean. "
-        "The answer must tell the user what to do, not merely describe what was found.\n\n"
+        "The answer must directly satisfy the requested outcome.\n\n"
         + buyer_rule
+        + response_contract
         + "Decision contract:\n"
         "1. Start summary with the direct current-state conclusion. In the same paragraph, "
         "name the decisive source and why it controls the decision.\n"
@@ -465,8 +491,8 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
         "recommendation.conclusion must state what is ready, what is not, and the reason.\n"
         "3. recommendation.next_move must name the owner, object, condition, and timing. "
         "Default owner is '담당자' unless evidence names a safe business role.\n"
-        "4. Rank actions in actual execution order. Use imperative titles and include the "
-        "specific Style, stage, source, field, recipient role, or artifact affected.\n"
+        "4. Follow the response-mode contract above. Do not turn a summary request into a plan "
+        "for the user to perform.\n"
         "5. Every action needs an observable completion check: a decided stage, a populated "
         "field list, a saved draft, a reconciled value, or a named approval gate. "
         "Phrases such as '확인 완료' or '처리 완료' alone are not acceptable.\n"
@@ -651,7 +677,11 @@ def run_claude_synthesis(
     raise AgentSynthesisError("Claude synthesis did not return structured output")
 
 
-def validate_synthesis(payload: dict[str, Any]) -> dict[str, Any]:
+def validate_synthesis(
+    payload: dict[str, Any],
+    *,
+    response_mode: str = "action",
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AgentSynthesisError("model synthesis must be a JSON object")
     if "\ufffd" in json.dumps(payload, ensure_ascii=False):
@@ -681,6 +711,10 @@ def validate_synthesis(payload: dict[str, Any]) -> dict[str, Any]:
     if generic_steps == len(action_plan):
         raise AgentSynthesisError(
             "model action_plan is generic and does not identify an executable outcome"
+        )
+    if response_mode == "summary" and _summary_response_delegates_work(payload):
+        raise AgentSynthesisError(
+            "model summary delegates classification work instead of returning results"
         )
     if not isinstance(confirmations, list) or any(
         not isinstance(item, str) for item in confirmations
@@ -1320,3 +1354,39 @@ def _is_generic_action(step: dict[str, Any]) -> bool:
         flags=re.IGNORECASE,
     )
     return generic_title and generic_completion and concrete_signal is None
+
+
+def _response_mode(query: str) -> str:
+    normalized = " ".join(str(query or "").split())
+    if re.search(r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)", normalized, re.IGNORECASE):
+        return "summary"
+    return "action"
+
+
+def _summary_response_delegates_work(payload: dict[str, Any]) -> bool:
+    steps = payload.get("action_plan") or []
+    imperative = 0
+    for step in steps:
+        text = " ".join(
+            str((step or {}).get(key) or "")
+            for key in ("title", "instruction")
+        )
+        if re.search(r"(?:하세요|하십시오|해\s*주세요|확인하세요|분리하세요)(?:\.|$)", text):
+            imperative += 1
+    if imperative < max(1, (len(steps) + 1) // 2):
+        return False
+    result_text = " ".join(
+        [
+            str(payload.get("summary") or ""),
+            str((payload.get("recommendation") or {}).get("conclusion") or ""),
+            *(str((step or {}).get("instruction") or "") for step in steps),
+        ]
+    )
+    has_result_classification = bool(
+        re.search(
+            r"(위험\s*후보|회신\s*대기|Chase\s*Needed|Waiting|TBD|확정|완료|자료\s*없음)",
+            result_text,
+            re.IGNORECASE,
+        )
+    )
+    return not has_result_classification or imperative == len(steps)

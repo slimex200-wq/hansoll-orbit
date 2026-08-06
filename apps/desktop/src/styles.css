@@ -5436,6 +5436,12 @@ textarea {
   -webkit-line-clamp: 2;
 }
 
+.summary-result-plan .step-main p {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
 .action-step-check {
   margin-top: 5px;
   color: var(--muted);
@@ -5479,6 +5485,18 @@ textarea {
   background: var(--surface-soft);
   border-radius: 6px;
   line-height: 15px;
+}
+
+.action-step-check-static > strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.action-step-check-static > span {
+  margin-top: 0;
 }
 
 .agent-source-recovery {

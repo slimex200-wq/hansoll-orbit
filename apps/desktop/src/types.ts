@@ -387,6 +387,7 @@ export interface AgentAnswer {
   status: "ready_for_review" | "needs_review" | "needs_confirmation";
   headline: string;
   summary: string;
+  response_mode?: "summary" | "action";
   answer_text: string;
   recommendation: AgentRecommendation;
   action_plan: AgentActionStep[];

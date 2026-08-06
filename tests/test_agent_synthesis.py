@@ -245,6 +245,49 @@ class AgentSynthesisTests(unittest.TestCase):
         self.assertIn("Never propose composing", prompt)
         self.assertIn("No buyer has been confirmed", prompt)
 
+    def test_summary_prompt_requires_results_instead_of_delegated_research(self) -> None:
+        prompt = build_synthesis_prompt(
+            {
+                "query": "이번 주 GAC 지연 위험과 회신 대기 업무 정리",
+                "response_mode": "summary",
+            }
+        )
+
+        self.assertIn("must perform the classification", prompt)
+        self.assertIn("ranked result rows", prompt)
+        self.assertIn("Do not use imperative Korean endings", prompt)
+        self.assertIn("Do not turn a summary request into a plan", prompt)
+
+    def test_summary_validation_rejects_answer_that_delegates_every_step(self) -> None:
+        payload = {
+            "summary": "GAC 위험 후보와 회신 대기 후보가 있으나 원본 확인이 필요합니다.",
+            "recommendation": {
+                "state": "review_required",
+                "title": "GAC 위험 후보를 정리해야 합니다.",
+                "conclusion": "검색 결과에는 위험 후보와 Waiting 후보가 있지만 최종 상태는 미확정입니다.",
+                "next_move": "담당자가 원본과 최신 메일을 확인한 뒤 상태를 확정합니다.",
+            },
+            "action_plan": [
+                {
+                    "title": "WIP를 확인하세요",
+                    "instruction": "활성 WIP 원본을 열고 완료 건을 제외해 위험 후보를 분리하세요.",
+                    "completion_check": "위험 후보 목록 확정",
+                    "state": "do_now",
+                },
+                {
+                    "title": "메일을 확인하세요",
+                    "instruction": "최신 thread를 열고 Waiting과 Chase Needed를 분리하세요.",
+                    "completion_check": "회신 대기 목록 확정",
+                    "state": "do_now",
+                },
+            ],
+            "confirmations": [],
+            "app_actions": [],
+        }
+
+        with self.assertRaisesRegex(AgentSynthesisError, "delegates classification"):
+            validate_synthesis(payload, response_mode="summary")
+
     def test_prompt_uses_confirmed_buyer_and_protects_draft_pack(self) -> None:
         prompt = build_synthesis_prompt(
             {

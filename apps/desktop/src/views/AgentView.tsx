@@ -753,9 +753,9 @@ export function AgentView({
             </section>
 
             <section className="agent-section">
-              <h3>오늘 실행 순서</h3>
-              <div className="action-plan compact-action-plan">
-                {result.answer.action_plan.slice(0, 3).map((step) => {
+              <h3>{result.answer.response_mode === "summary" ? "정리 결과" : "오늘 실행 순서"}</h3>
+              <div className={`action-plan compact-action-plan${result.answer.response_mode === "summary" ? " summary-result-plan" : ""}`}>
+                {result.answer.action_plan.map((step) => {
                   const stepState = actionState[step.state];
                   return (
                     <motion.div
@@ -772,23 +772,25 @@ export function AgentView({
                           <Badge value={stepState.label} tone={stepState.tone} />
                         </div>
                         <p>{step.instruction}</p>
-                        <details className="action-step-check">
-                          <summary>
-                            완료 기준
-                            <ChevronDown size={13} />
-                          </summary>
-                          <span>{step.completion_check}</span>
-                        </details>
+                        {result.answer.response_mode === "summary" ? (
+                          <div className="action-step-check action-step-check-static">
+                            <strong>판단 근거</strong>
+                            <span>{step.completion_check}</span>
+                          </div>
+                        ) : (
+                          <details className="action-step-check">
+                            <summary>
+                              완료 기준
+                              <ChevronDown size={13} />
+                            </summary>
+                            <span>{step.completion_check}</span>
+                          </details>
+                        )}
                       </div>
                     </motion.div>
                   );
                 })}
               </div>
-              {result.answer.action_plan.length > 3 ? (
-                <span className="agent-more-count">
-                  상세 실행 {result.answer.action_plan.length - 3}건 더 있음
-                </span>
-              ) : null}
             </section>
 
             {result.actionBlockedReason ? (
@@ -943,23 +945,6 @@ export function AgentView({
                           : "답변과 할 일 저장"}
                   </button>
                 </section>
-
-                {result.answer.action_plan.length > 3 ? (
-                <section className="agent-section">
-                  <h3>추가 실행 항목</h3>
-                  <div className="agent-full-action-list">
-                    {result.answer.action_plan.slice(3).map((step) => (
-                      <div key={`${step.order}-${step.title}`}>
-                        <strong>
-                          {step.order}. {step.title}
-                        </strong>
-                        <p>{step.instruction}</p>
-                        <span>완료 기준 · {step.completion_check}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                ) : null}
 
                 <section className="agent-section">
                   <h3>확인 필요</h3>
