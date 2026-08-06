@@ -10,7 +10,16 @@ const desktopRoot = path.resolve(scriptDirectory, "..");
 const repoRoot = path.resolve(desktopRoot, "../..");
 const outputDirectory = path.join(repoRoot, "outputs", "desktop-e2e-empty-state");
 const userDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-empty-e2e-"));
+const sourceRoot = path.join(userDataDirectory, "source");
+const solidSubmitTemplate = path.join(
+  sourceRoot,
+  "Talbots",
+  "Submit form",
+  "SOLID SUBMIT FORM.xlsx",
+);
 fs.mkdirSync(outputDirectory, { recursive: true });
+fs.mkdirSync(path.dirname(solidSubmitTemplate), { recursive: true });
+fs.writeFileSync(solidSubmitTemplate, "ORBIT E2E template fixture");
 
 const packagedExecutable = process.env.ORBIT_E2E_EXECUTABLE || "";
 const application = await electron.launch({
@@ -23,6 +32,7 @@ const application = await electron.launch({
     ...process.env,
     OPENCRAB_E2E_MODE: "1",
     OPENCRAB_E2E_EMPTY_STATE: "1",
+    OPENCRAB_SOURCE_ROOT: sourceRoot,
     OPENCRAB_DESKTOP_CONFIG_PATH: path.join(userDataDirectory, "no-microsoft-config.json"),
   },
 });
