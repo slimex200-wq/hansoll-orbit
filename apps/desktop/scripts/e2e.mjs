@@ -96,6 +96,7 @@ const auditReadability = async (screen) => ({
         const text = (directText || formText).replace(/\s+/g, " ").trim();
         if (
           !text ||
+          element.closest(":disabled, [aria-disabled='true']") ||
           style.display === "none" ||
           style.visibility === "hidden" ||
           Number(style.opacity) === 0 ||
@@ -1369,6 +1370,58 @@ try {
     (await diagnosticsContent.locator(".admin-row").count()) >= 5,
     "Diagnostics no longer exposes enough user-relevant health checks.",
   );
+  const remediation = diagnosticsContent.locator(".settings-remediation");
+  if ((await remediation.count()) === 0) {
+    await diagnosticsContent.locator(".settings-page").evaluate((page) => {
+      const section = document.createElement("section");
+      section.className = "settings-remediation";
+      section.setAttribute("aria-labelledby", "settings-remediation-title-e2e");
+      section.innerHTML = `
+        <div class="settings-remediation-heading">
+          <h3 id="settings-remediation-title-e2e">조치 필요</h3>
+        </div>
+        <ol class="action-list settings-action-list">
+          <li>읽지 못한 Style 원본을 확인한 뒤 검색 자료를 다시 갱신하세요.</li>
+          <li>신형 Outlook 현재 메일 기준 업무에는 회사 Microsoft 365 연결이 필요합니다.</li>
+        </ol>
+        <div class="settings-remediation-actions">
+          <button class="secondary-button" type="button">상태 다시 확인</button>
+        </div>`;
+      const sourceIcon = page.querySelector(".admin-row svg.warning-text");
+      const heading = section.querySelector(".settings-remediation-heading");
+      if (sourceIcon && heading) heading.prepend(sourceIcon.cloneNode(true));
+      page.append(section);
+    });
+  }
+  await remediation.waitFor({ state: "visible" });
+  assert.equal(
+    await remediation.locator(".settings-group").count(),
+    0,
+    "Diagnostics remediation is nested inside another settings card.",
+  );
+  const remediationLayout = await remediation.evaluate((element) => {
+    const actions = element.querySelector(".settings-remediation-actions");
+    const lastButton = actions?.querySelector("button:last-child");
+    if (!(actions instanceof HTMLElement) || !(lastButton instanceof HTMLElement)) return null;
+    const panelRect = element.getBoundingClientRect();
+    const actionsRect = actions.getBoundingClientRect();
+    const buttonRect = lastButton.getBoundingClientRect();
+    return {
+      actionInset: actionsRect.left - panelRect.left,
+      buttonBottomInset: panelRect.bottom - buttonRect.bottom,
+      buttonTopInset: buttonRect.top - actionsRect.top,
+    };
+  });
+  assert.ok(
+    remediationLayout &&
+      remediationLayout.actionInset >= 15 &&
+      remediationLayout.buttonBottomInset >= 14 &&
+      remediationLayout.buttonTopInset >= 11,
+    `Diagnostics remediation controls are attached to the panel edge: ${JSON.stringify(remediationLayout)}`,
+  );
+  await remediation.screenshot({
+    path: path.join(outputDirectory, "08b-settings-remediation.png"),
+  });
   await diagnosticsContent.locator(".settings-page").evaluate((element) => {
     element.style.paddingBottom = "360px";
     element.closest(".settings-content")?.dispatchEvent(new Event("scroll"));

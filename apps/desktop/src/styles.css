@@ -3974,7 +3974,33 @@ textarea {
 
 .settings-action-list {
   margin: 0;
-  padding: 12px 18px 12px 38px;
+  padding: 0 0 0 22px;
+}
+
+.settings-remediation {
+  margin-top: 22px;
+  padding: 14px 16px 15px;
+  background: color-mix(in srgb, var(--amber-soft) 54%, var(--surface));
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+}
+
+.settings-remediation-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.settings-remediation-heading svg {
+  flex: 0 0 auto;
+  color: var(--amber);
+}
+
+.settings-remediation-heading h3 {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .connection-provider {
@@ -6137,6 +6163,12 @@ body.resizing-agent * {
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
+}
+
+.settings-remediation-actions {
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--amber) 20%, transparent);
 }
 
 .mail-thread-group {

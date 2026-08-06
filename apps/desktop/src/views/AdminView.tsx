@@ -1583,47 +1583,48 @@ export function AdminView({
               </SettingsGroup>
 
               {audit?.next_actions.length ? (
-                <>
-                  <h3 className="settings-subheading">조치 필요</h3>
-                  <SettingsGroup>
-                    <ol className="action-list settings-action-list">
-                      {audit.next_actions.map((item) => (
-                        <li key={item}>{auditAction(item)}</li>
-                      ))}
-                    </ol>
-                    <div className="settings-remediation-actions">
-                      {hasBusinessIndexProblems ? (
-                        <button
-                          className="primary-button"
-                          disabled={businessIndexesPreparing}
-                          onClick={() => void prepareBusinessIndexes()}
-                          type="button"
-                        >
-                          <Database size={15} />
-                          {businessIndexesPreparing ? "업무 자료 준비 중" : "업무 검색 자료 준비"}
-                        </button>
-                      ) : null}
-                      {hasMailProblem ? (
-                        <button
-                          className={hasBusinessIndexProblems ? "secondary-button" : "primary-button"}
-                          disabled={mailAction !== null}
-                          onClick={() =>
-                            microsoftConnected
-                              ? void runMailAction("sync", () => window.opencrab.syncMicrosoftMail())
-                              : setSection("connections")
-                          }
-                          type="button"
-                        >
-                          <RefreshCw className={mailAction === "sync" ? "spin" : ""} size={15} />
-                          {microsoftConnected ? "Outlook 메일 다시 가져오기" : "Outlook 연결 설정"}
-                        </button>
-                      ) : null}
-                      <button className="secondary-button" onClick={() => void refresh()} type="button">
-                        상태 다시 확인
+                <section aria-labelledby="settings-remediation-title" className="settings-remediation">
+                  <div className="settings-remediation-heading">
+                    <AlertTriangle aria-hidden="true" size={16} />
+                    <h3 id="settings-remediation-title">조치 필요</h3>
+                  </div>
+                  <ol className="action-list settings-action-list">
+                    {audit.next_actions.map((item) => (
+                      <li key={item}>{auditAction(item)}</li>
+                    ))}
+                  </ol>
+                  <div className="settings-remediation-actions">
+                    {hasBusinessIndexProblems ? (
+                      <button
+                        className="primary-button"
+                        disabled={businessIndexesPreparing}
+                        onClick={() => void prepareBusinessIndexes()}
+                        type="button"
+                      >
+                        <Database size={15} />
+                        {businessIndexesPreparing ? "업무 자료 준비 중" : "업무 검색 자료 준비"}
                       </button>
-                    </div>
-                  </SettingsGroup>
-                </>
+                    ) : null}
+                    {hasMailProblem ? (
+                      <button
+                        className={hasBusinessIndexProblems ? "secondary-button" : "primary-button"}
+                        disabled={mailAction !== null}
+                        onClick={() =>
+                          microsoftConnected
+                            ? void runMailAction("sync", () => window.opencrab.syncMicrosoftMail())
+                            : setSection("connections")
+                        }
+                        type="button"
+                      >
+                        <RefreshCw className={mailAction === "sync" ? "spin" : ""} size={15} />
+                        {microsoftConnected ? "Outlook 메일 다시 가져오기" : "Outlook 연결 설정"}
+                      </button>
+                    ) : null}
+                    <button className="secondary-button" onClick={() => void refresh()} type="button">
+                      상태 다시 확인
+                    </button>
+                  </div>
+                </section>
               ) : null}
             </SettingsPage>
           ) : null}
