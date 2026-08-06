@@ -863,7 +863,80 @@ try {
     path: path.join(outputDirectory, "04a-task-medium-1252.png"),
     fullPage: true,
   });
+  await setWindowContentSize(1478, 938);
+  const originalAgentWidth = await window.evaluate(() => {
+    const workspace = document.querySelector(".workspace");
+    if (!(workspace instanceof HTMLElement)) return "";
+    const current = workspace.style.getPropertyValue("--agent-width");
+    workspace.style.setProperty("--agent-width", "444px");
+    return current;
+  });
+  await window.waitForTimeout(180);
+  const wideAgentPlannerLayout = await window.evaluate(() => {
+    const planner = document.querySelector(".planner-view");
+    const layout = document.querySelector(".planner-list-layout");
+    const taskPanel = document.querySelector(".planner-task-panel");
+    const milestonePanel = document.querySelector(".planner-milestone-panel");
+    const filter = document.querySelector(".planner-filter-row");
+    const statusControls = [...document.querySelectorAll(".planner-task-panel select")];
+    const taskBounds = taskPanel?.getBoundingClientRect();
+    const milestoneBounds = milestonePanel?.getBoundingClientRect();
+    return {
+      plannerClientWidth: planner?.clientWidth ?? 0,
+      plannerScrollWidth: planner?.scrollWidth ?? 0,
+      layoutClientWidth: layout?.clientWidth ?? 0,
+      layoutScrollWidth: layout?.scrollWidth ?? 0,
+      filterClientWidth: filter?.clientWidth ?? 0,
+      filterScrollWidth: filter?.scrollWidth ?? 0,
+      panelsStacked: Boolean(
+        taskBounds && milestoneBounds && milestoneBounds.top >= taskBounds.bottom - 1,
+      ),
+      statusControlsInsidePanel: statusControls.every(
+        (control) => control.getBoundingClientRect().right <= (taskBounds?.right ?? 0),
+      ),
+      scrollbarWidth: getComputedStyle(
+        document.querySelector(".content"),
+        "::-webkit-scrollbar",
+      ).width,
+      scrollbarButtonDisplay: getComputedStyle(
+        document.querySelector(".content"),
+        "::-webkit-scrollbar-button",
+      ).display,
+    };
+  });
+  assert.ok(
+    wideAgentPlannerLayout.plannerScrollWidth <= wideAgentPlannerLayout.plannerClientWidth &&
+      wideAgentPlannerLayout.layoutScrollWidth <= wideAgentPlannerLayout.layoutClientWidth,
+    `Wide Agent causes horizontal planner overflow: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.ok(
+    wideAgentPlannerLayout.filterScrollWidth <= wideAgentPlannerLayout.filterClientWidth,
+    `Planner filters still create an inline scrollbar: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(
+    wideAgentPlannerLayout.panelsStacked,
+    true,
+    `Planner panels do not respond to the remaining workspace width: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(
+    wideAgentPlannerLayout.statusControlsInsidePanel,
+    true,
+    `Wide Agent clips planner status controls: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(wideAgentPlannerLayout.scrollbarWidth, "10px");
+  assert.equal(wideAgentPlannerLayout.scrollbarButtonDisplay, "none");
+  await window.screenshot({
+    path: path.join(outputDirectory, "04a2-planner-wide-agent-responsive.png"),
+    fullPage: true,
+  });
+  await window.evaluate((width) => {
+    const workspace = document.querySelector(".workspace");
+    if (!(workspace instanceof HTMLElement)) return;
+    if (width) workspace.style.setProperty("--agent-width", width);
+    else workspace.style.removeProperty("--agent-width");
+  }, originalAgentWidth);
   await setWindowContentSize(1440, 900);
+  await window.waitForTimeout(120);
   await window.screenshot({
     path: path.join(outputDirectory, "04-task-followup.png"),
     fullPage: true,

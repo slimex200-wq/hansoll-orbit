@@ -117,6 +117,48 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+
+*:hover {
+  scrollbar-color: color-mix(in srgb, var(--muted) 44%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 40px;
+  min-height: 40px;
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 44%, transparent);
+  border-color: transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 48%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 html,
@@ -2915,6 +2957,8 @@ textarea {
   width: min(100%, 1240px);
   min-width: 0;
   margin: 0 auto;
+  container-name: planner;
+  container-type: inline-size;
 }
 
 .planner-header-actions,
@@ -3058,8 +3102,8 @@ textarea {
   display: flex;
   min-height: 42px;
   padding: 7px 12px;
-  overflow-x: auto;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   border-bottom: 1px solid var(--border);
 }
@@ -4706,25 +4750,8 @@ textarea {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--border-strong) transparent;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
   touch-action: pan-y;
-}
-
-.settings-content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.settings-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-content::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background-clip: padding-box;
 }
 
 .settings-content-frame {
@@ -6666,10 +6693,6 @@ body.resizing-agent * {
   border-color: var(--border);
 }
 
-:root:is([data-theme="dark"], [data-theme="dracula"]) ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-}
-
 :root:is([data-theme="dark"], [data-theme="dracula"]) .mail-thread-header,
 :root:is([data-theme="dark"], [data-theme="dracula"]) .task-detail-main,
 :root:is([data-theme="dark"], [data-theme="dracula"]) .task-evidence-list {
@@ -6910,6 +6933,97 @@ body.resizing-agent * {
   .workspace .agent-sidebar.open {
     width: calc(100% - 12px);
     max-width: calc(100% - 12px);
+  }
+}
+
+@container planner (max-width: 1000px) {
+  .planner-month-layout,
+  .planner-list-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .planner-day-agenda {
+    position: static;
+  }
+
+  .planner-year-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planner-create-form,
+  .planner-create-form.milestone {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .planner-create-form .primary-button,
+  .planner-create-form .secondary-button {
+    justify-self: start;
+  }
+}
+
+@container planner (max-width: 760px) {
+  .planner-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planner-summary-item:nth-child(2) {
+    border-right: 0;
+  }
+
+  .planner-summary-item:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .planner-command-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .planner-date-navigation {
+    width: 100%;
+  }
+
+  .planner-day {
+    min-height: 82px;
+    padding: 4px;
+  }
+
+  .planner-calendar-entry {
+    display: block;
+    min-height: 6px;
+    padding: 0;
+    overflow: hidden;
+    border-left-width: 3px;
+    font-size: 0;
+  }
+
+  .planner-calendar-entry > svg {
+    display: none;
+  }
+}
+
+@container planner (max-width: 560px) {
+  .planner-header-actions {
+    width: 100%;
+  }
+
+  .planner-header-actions > button {
+    flex: 1;
+  }
+
+  .planner-create-form,
+  .planner-create-form.milestone,
+  .planner-year-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .planner-list-item,
+  .planner-list-item.milestone {
+    grid-template-columns: 8px minmax(0, 1fr) 96px;
+  }
+
+  .planner-list-item time {
+    display: none;
   }
 }
 
