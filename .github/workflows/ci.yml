@@ -97,6 +97,15 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Python packaging dependencies
+        working-directory: .
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pymsalruntime
       - name: Install desktop dependencies with Electron
         run: npm ci --no-audit --no-fund
       - name: Build production directory package
