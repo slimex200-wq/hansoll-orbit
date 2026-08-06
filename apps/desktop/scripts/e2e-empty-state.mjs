@@ -64,7 +64,13 @@ try {
   await window.getByRole("heading", { name: "업무 현황" }).waitFor({ timeout: 120_000 });
   // Synthetic data must never be indistinguishable from real work. Any mode
   // that seeds fixtures has to declare itself in the badge and window title.
-  await window.getByText("IT 검토용", { exact: true }).waitFor({ timeout: 30_000 });
+  // Compact Windows runners intentionally hide the secondary title-bar label,
+  // so verify the synthetic-data marker is mounted instead of requiring it to
+  // remain visually exposed at every responsive width.
+  await window
+    .getByTestId("desktop-titlebar")
+    .getByText("IT 검토용", { exact: true })
+    .waitFor({ state: "attached", timeout: 30_000 });
   assert.equal(
     await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getTitle(),
