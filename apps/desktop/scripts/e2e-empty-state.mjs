@@ -106,10 +106,15 @@ try {
   await application.evaluate(({ BrowserWindow }) => {
     const target = BrowserWindow.getAllWindows()[0];
     target.unmaximize();
-    target.setContentSize(1024, 768);
+    // Stay below the responsive breakpoint without requesting the runner's
+    // entire work area; Windows constrains a 1024x768 content window when the
+    // taskbar or display scaling reduces the available desktop height.
+    target.setContentSize(1024, 720);
     target.center();
   });
-  await window.waitForFunction(() => window.innerWidth === 1024 && window.innerHeight === 768);
+  await window.waitForFunction(
+    () => window.innerWidth === 1024 && window.innerHeight >= 640 && window.innerHeight <= 720,
+  );
   for (const theme of ["dark", "dracula"]) {
     const readability = await inspectSuggestionReadability(theme);
     assert.ok(readability, `${theme} Agent suggestions were not rendered.`);
