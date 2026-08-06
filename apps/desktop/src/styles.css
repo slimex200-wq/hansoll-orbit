@@ -4739,47 +4739,106 @@ textarea {
 .settings-scroll-rail {
   position: absolute;
   z-index: 2;
-  top: 22px;
-  bottom: 22px;
-  left: 9px;
-  width: 18px;
+  top: 50%;
+  left: 8px;
+  width: 36px;
+  max-height: min(70vh, 40rem);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 140ms ease;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease;
+  visibility: hidden;
 }
 
 .settings-scroll-rail.visible {
-  opacity: 0.7;
+  opacity: 0.42;
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.settings-scroll-rail.visible:hover,
+.settings-scroll-rail.visible:focus-within,
+.settings-scroll-rail[data-scrubbing="true"] {
+  opacity: 1;
 }
 
 .settings-scroll-ticks {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: 100%;
-  grid-template-rows: repeat(23, minmax(1px, 1fr));
-  align-items: start;
+  max-height: inherit;
+  overflow-y: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, #000 6%, #000 94%, transparent);
 }
 
-.settings-scroll-ticks > span {
-  width: 5px;
-  height: 1px;
-  background: var(--border-strong);
+.settings-scroll-ticks::-webkit-scrollbar {
+  display: none;
 }
 
-.settings-scroll-ticks > span:nth-child(5n + 1) {
-  width: 9px;
+.settings-scroll-tick {
+  display: flex;
+  flex: 0 0 10px;
+  align-items: center;
+  width: 36px;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  outline: none;
 }
 
-.settings-scroll-position {
-  position: absolute;
-  left: 0;
+.settings-scroll-tick > span {
   display: block;
-  width: 17px;
+  width: 26px;
   height: 2px;
   background: var(--text);
   border-radius: 999px;
-  transform: translateY(-50%);
-  transition: top 80ms linear;
+  opacity: 0.4;
+  transform: scaleX(0.2308);
+  transform-origin: left center;
+  transition:
+    transform 160ms linear(0, 0.398 10%, 0.682 20%, 0.843 30%, 0.925 40%, 0.972 50%, 1.004 60%, 1.008 70%, 1.003 80%, 1),
+    opacity 120ms ease;
+}
+
+.settings-scroll-tick[data-active="true"] > span {
+  opacity: 0.64;
+}
+
+.settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"]) > span {
+  opacity: 0.92;
+  transform: scaleX(1);
+}
+
+.settings-scroll-tick:has(+ .settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"])) > span,
+.settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"]) + .settings-scroll-tick > span {
+  transform: scaleX(0.7693);
+}
+
+.settings-scroll-tick:has(+ .settings-scroll-tick + .settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"])) > span,
+.settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"]) + .settings-scroll-tick + .settings-scroll-tick > span {
+  transform: scaleX(0.5385);
+}
+
+.settings-scroll-tick:has(+ .settings-scroll-tick + .settings-scroll-tick + .settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"])) > span,
+.settings-scroll-tick:is(:hover, :focus-visible, [data-scrub-target="true"]) + .settings-scroll-tick + .settings-scroll-tick + .settings-scroll-tick > span {
+  transform: scaleX(0.3847);
+}
+
+.settings-scroll-rail[data-scrubbing="true"] .settings-scroll-tick > span {
+  transition-duration: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-scroll-rail,
+  .settings-scroll-tick > span {
+    transition-duration: 0ms;
+  }
 }
 
 .settings-page {

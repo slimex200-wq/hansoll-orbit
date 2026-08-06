@@ -1,72 +1,59 @@
-# ORBIT motion design QA
+# ORBIT settings scroll rail design QA
 
-## Scope
+## Comparison target
 
-- Product: ORBIT Windows desktop application
-- Change: motion-only enhancement; existing information architecture, visual tokens, typography, and control placement remain authoritative
-- Selected direction: Quiet Precision globally, Agent Pulse during Work Agent execution, and Tactile Operations for direct manipulation
-- States reviewed: dashboard idle, Work Agent loading, artifact selection/create flow, search loading/results, planner month/year, light/dark/dracula themes, 1440×900 and 1024×768 layouts
+- Source visual truth: `C:\Users\shjung1\AppData\Local\Temp\codex-clipboard-0c6e0d26-31da-46dc-b603-0c0c2d46fab3.png`
+- Implementation screenshot: `outputs/desktop-e2e/08a-settings-scroll-rail-hover.png`
+- Combined comparison input: `outputs/scroll-rail-audit/03-codex-orbit-comparison.png`
+- Viewport: ORBIT desktop at 1440 × 760 CSS px, device scale factor 1
+- Source pixels: 45 × 466
+- Implementation pixels: 1440 × 760; focused rail crop 45 × 466
+- Density normalization: both focused inputs compared at 1:1 pixels
+- State: light theme, diagnostics page overflowed, twelfth rail marker hovered
 
-## Visual sources
+## Full-view comparison evidence
 
-| Direction | Source | Size / density |
-| --- | --- | --- |
-| Quiet Precision | `C:\Users\shjung1\.codex\generated_images\019fcba5-61cf-75c1-87fc-7ced92d79e59\exec-e2958990-3e8f-498b-95de-e5187e193bd9.png` | 1704×923, 96 DPI |
-| Agent Pulse | `C:\Users\shjung1\.codex\generated_images\019fcba5-61cf-75c1-87fc-7ced92d79e59\exec-c82e0468-3944-48a4-9bdf-1be790548358.png` | 1704×923, 96 DPI |
-| Tactile Operations | `C:\Users\shjung1\.codex\generated_images\019fcba5-61cf-75c1-87fc-7ced92d79e59\exec-06e89e30-4981-4c92-a4cf-41189bf4c5a5.png` | 1704×923, 96 DPI |
+The implementation preserves ORBIT's existing settings shell, toolbar, page width, typography, status rows, account footer, and native content scrollbar. The new rail occupies the reserved 36 px gutter between the settings navigation and page content, so it does not cover text or change the content column. The full screenshot confirms that the Work Agent panel and settings layout keep their previous proportions.
 
-## Implementation evidence
+## Focused-region comparison evidence
 
-| State | Screenshot | Size / density |
-| --- | --- | --- |
-| Dashboard, light | `outputs/desktop-e2e/22-dashboard-light-final.png` | 1440×900, 96 DPI |
-| Work Agent loading | `outputs/desktop-e2e/02-agent-loading.png` | 1440×900, 96 DPI |
-| Artifact selected/create flow | `outputs/desktop-e2e/06-artifact-auto-template.png` | 1440×900, 96 DPI |
-| Planner month | `outputs/desktop-e2e/04b-planner-month.png` | 1440×900, 96 DPI |
-| Planner year | `outputs/desktop-e2e/04c-planner-year.png` | 1440×900, 96 DPI |
-| Search results | `outputs/desktop-e2e/05-unified-search.png` | 1440×900, 96 DPI |
-| Compact dashboard | `outputs/desktop-e2e/12-dashboard-1024.png` | 1024×768, 96 DPI |
+The source and implementation rail crops were opened together in `outputs/scroll-rail-audit/03-codex-orbit-comparison.png`. Both show the same 23-position rhythm: six-pixel resting markers, a 26-pixel hovered marker, three progressively shorter neighbors on each side, left-origin scaling, and a vertically centered rail. ORBIT intentionally maps the source's dark foreground/background to its existing light-theme `--text` and panel tokens.
 
-## Comparison evidence
+## Required fidelity surfaces
 
-The three source concepts and the corresponding implementation screenshots were opened together at original detail in one comparison input. The review compared both the full shell and the focused regions below.
+- Fonts and typography: the rail contains no visible copy; accessible button labels use native semantics without introducing typography drift.
+- Spacing and layout rhythm: 36 × 10 px targets, 26 × 2 px markers, 23 positions, and centered placement match the measured source behavior. The reserved gutter prevents overlap with page content.
+- Colors and visual tokens: marker color uses ORBIT's existing `--text` token; resting opacity is 0.4, active opacity 0.64, and hover opacity 0.92. This is the light-theme equivalent of the source rather than a new palette.
+- Image quality and asset fidelity: no raster asset, logo, illustration, or non-standard icon is present in the source rail. The markers are native control affordances, not substitute artwork.
+- Copy and content: no visible source copy exists. Korean `aria-label` values describe the current location and each seek target.
 
-### Full-view comparison
+## Interaction verification
 
-- Dashboard: navigation, header, cards, tables, spacing, border radii, and typography preserve the existing ORBIT design. The implementation adds only shared-layout navigation movement, restrained view entry, numeric changes, and row repositioning.
-- Work Agent: the right rail retains the established width, hierarchy, query bubble, model control, and composer. The loading state adds a compact execution timeline and a two-pixel activity trail without displacing the dashboard.
-- Artifacts: recipe density and form hierarchy remain unchanged. Hover/tap feedback, the selected recipe state, form reveal, and created rows carry the tactile direction without introducing a new card system.
-- Differences in task counts and copy are E2E fixture/data differences, not layout regressions.
-
-### Focused-region comparison
-
-- Work Agent loading panel: visible query → loading label → execution stages reads top-to-bottom, matches the Agent Pulse intent, and preserves the existing `LoadingBlock` contract required by automation.
-- Search: the active tab marker moves between existing tabs; loading skeletons occupy realistic result-row geometry; result transition does not reorder controls.
-- Planner: summary numerals animate, while month/year mode switching remains immediate to preserve established test and interaction timing.
-- Artifacts: recipe cards lift by 2 px on hover and compress to 0.985 on press; the create panel reveals vertically and artifact rows settle into position.
-- Reduced motion: `MotionConfig reducedMotion="user"`, component-level `useReducedMotion`, and the existing global reduced-motion CSS eliminate or truncate nonessential animation for users who request it.
-
-## Comparison history and fixes
-
-1. Initial Work Agent implementation replaced the existing loading block. This broke the established E2E loading-state contract; the loading block was restored and the execution timeline was added beneath it.
-2. Initial planner content animation delayed immediate year-mode assertions. The content wrapper was removed; the summary-number motion remains and mode changes are synchronous.
-3. A final accessibility pass added global Motion reduced-motion handling and removed unused planner-indicator CSS.
-4. Final build and E2E screenshots were regenerated after those fixes.
+- Hover and keyboard focus expand the target marker and three neighboring markers on both sides.
+- Clicking a marker smooth-scrolls to the corresponding page position.
+- Pointer drag scrubs continuously with immediate scroll updates and pointer capture.
+- The active scroll position is exposed with `aria-current="location"`.
+- The rail remains discoverable at low opacity and becomes fully visible on hover/focus/scrub.
+- `prefers-reduced-motion` removes marker and rail transitions.
+- Existing mouse-wheel scrolling and the native scrollbar remain functional.
 
 ## Findings
 
-- P0: none
-- P1: none
-- P2: none
-- Non-blocking: static screenshots prove layout and state fidelity but cannot encode motion timing; runtime E2E and reduced-motion configuration provide the complementary behavioral evidence.
+- P0: none.
+- P1: none.
+- P2: none.
+- P3 follow-up: the rail is deliberately adapted to ORBIT's light theme; a dark-theme capture could be added later as extra visual evidence, but current theme-wide E2E coverage passed.
+
+## Comparison history
+
+1. Initial automated overflow fixture changed page height without emitting a scroll event, so the React visibility state stayed hidden. The fixture now dispatches the same scroll event used by the live container, after which the rail rendered and passed interaction checks.
+2. The final comparison confirmed the hovered-marker fisheye profile, gutter alignment, and content non-overlap. No P0/P1/P2 visual fix remained.
 
 ## Verification
 
-- TypeScript + Vite production build: passed
-- Unit/integration tests: 141/141 passed
-- Desktop E2E: passed; 7 workspaces, persisted Agent state, 3 themes, 1920×1032 and 1024×768 layouts
-- Empty-state E2E: 4/4 passed
-- Local recovery E2E: passed across restart/export/restore/tamper/oversize/corruption scenarios
-- Production dependency audit: 0 vulnerabilities
+- TypeScript + Vite production build: passed.
+- Unit/integration tests: 141/141 passed.
+- Desktop E2E: passed, including 23 rail targets, progressive hover widths, click-to-bottom navigation, mouse-wheel scrolling, 7 workspaces, 3 themes, and compact layout coverage.
+- `git diff --check`: passed.
 
 Final result: passed

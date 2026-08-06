@@ -201,6 +201,16 @@ export function AdminView({
     });
   };
 
+  const seekSettingsScroll = (progress: number, behavior: ScrollBehavior) => {
+    const element = settingsContentRef.current;
+    if (!element) return;
+    const scrollRange = Math.max(0, element.scrollHeight - element.clientHeight);
+    element.scrollTo({
+      top: Math.min(1, Math.max(0, progress)) * scrollRange,
+      behavior,
+    });
+  };
+
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const element = settingsContentRef.current;
@@ -1732,6 +1742,7 @@ export function AdminView({
           ) : null}
           </main>
           <SettingsScrollRail
+            onSeek={seekSettingsScroll}
             progress={settingsScroll.progress}
             visible={settingsScroll.visible}
           />
@@ -1839,21 +1850,87 @@ function SettingsPage({
   );
 }
 
-function SettingsScrollRail({ progress, visible }: { progress: number; visible: boolean }) {
+const SETTINGS_SCROLL_TICK_COUNT = 23;
+
+function SettingsScrollRail({
+  onSeek,
+  progress,
+  visible,
+}: {
+  onSeek: (progress: number, behavior: ScrollBehavior) => void;
+  progress: number;
+  visible: boolean;
+}) {
+  const clampedProgress = Math.min(1, Math.max(0, progress));
+  const activeIndex = Math.round(clampedProgress * (SETTINGS_SCROLL_TICK_COUNT - 1));
+  const [scrubTarget, setScrubTarget] = useState<number | null>(null);
+  const pointerStartRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
+
+  const seekFromPointer = (element: HTMLElement, clientY: number) => {
+    const bounds = element.getBoundingClientRect();
+    const ratio = bounds.height > 0 ? (clientY - bounds.top) / bounds.height : 0;
+    const index = Math.round(
+      Math.min(1, Math.max(0, ratio)) * (SETTINGS_SCROLL_TICK_COUNT - 1),
+    );
+    setScrubTarget(index);
+    onSeek(index / (SETTINGS_SCROLL_TICK_COUNT - 1), "auto");
+  };
+
   return (
     <div
-      aria-hidden="true"
+      aria-label="설정 페이지 위치"
       className={visible ? "settings-scroll-rail visible" : "settings-scroll-rail"}
+      data-scrubbing={scrubTarget !== null ? "true" : undefined}
+      onPointerCancel={() => {
+        pointerStartRef.current = null;
+        setScrubTarget(null);
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        pointerStartRef.current = event.clientY;
+        suppressClickRef.current = false;
+        seekFromPointer(event.currentTarget, event.clientY);
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        if (pointerStartRef.current !== null && Math.abs(event.clientY - pointerStartRef.current) > 3) {
+          suppressClickRef.current = true;
+        }
+        seekFromPointer(event.currentTarget, event.clientY);
+      }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        pointerStartRef.current = null;
+        setScrubTarget(null);
+      }}
+      role="navigation"
     >
       <div className="settings-scroll-ticks">
-        {Array.from({ length: 23 }, (_, index) => (
-          <span key={index} />
+        {Array.from({ length: SETTINGS_SCROLL_TICK_COUNT }, (_, index) => (
+          <button
+            aria-current={index === activeIndex ? "location" : undefined}
+            aria-label={`설정 페이지 ${index + 1}/${SETTINGS_SCROLL_TICK_COUNT} 위치로 이동`}
+            className="settings-scroll-tick"
+            data-active={index === activeIndex ? "true" : undefined}
+            data-scrub-target={index === scrubTarget ? "true" : undefined}
+            key={index}
+            onClick={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
+              onSeek(index / (SETTINGS_SCROLL_TICK_COUNT - 1), "smooth");
+            }}
+            type="button"
+          >
+            <span />
+          </button>
         ))}
       </div>
-      <span
-        className="settings-scroll-position"
-        style={{ top: `calc(${Math.min(1, Math.max(0, progress)) * 100}% - 1px)` }}
-      />
     </div>
   );
 }

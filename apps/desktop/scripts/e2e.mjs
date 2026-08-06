@@ -1298,6 +1298,7 @@ try {
   );
   await diagnosticsContent.locator(".settings-page").evaluate((element) => {
     element.style.paddingBottom = "360px";
+    element.closest(".settings-content")?.dispatchEvent(new Event("scroll"));
   });
   const diagnosticsScrollBefore = await diagnosticsContent.evaluate((element) => ({
     clientHeight: element.clientHeight,
@@ -1312,6 +1313,40 @@ try {
     diagnosticsScrollBefore.scrollHeight > diagnosticsScrollBefore.clientHeight,
     `Diagnostics fixture no longer exercises overflow: ${JSON.stringify(diagnosticsScrollBefore)}`,
   );
+  const settingsScrollRail = window.locator(".settings-scroll-rail");
+  await settingsScrollRail.waitFor({ state: "visible" });
+  const settingsScrollTicks = settingsScrollRail.locator(".settings-scroll-tick");
+  assert.equal(
+    await settingsScrollTicks.count(),
+    23,
+    "Settings scroll rail does not expose the expected navigation range.",
+  );
+  await settingsScrollTicks.nth(11).hover();
+  await window.waitForTimeout(220);
+  const railMarkerWidths = await settingsScrollTicks.evaluateAll((ticks) =>
+    ticks.map((tick) => {
+      const marker = tick.querySelector("span");
+      return marker ? marker.getBoundingClientRect().width : 0;
+    }),
+  );
+  assert.ok(
+    railMarkerWidths[11] > railMarkerWidths[10] &&
+      railMarkerWidths[10] > railMarkerWidths[9] &&
+      railMarkerWidths[9] > railMarkerWidths[0],
+    `Settings scroll rail does not expand progressively on hover: ${JSON.stringify(railMarkerWidths)}`,
+  );
+  await window.screenshot({
+    path: path.join(outputDirectory, "08a-settings-scroll-rail-hover.png"),
+    fullPage: true,
+  });
+  await settingsScrollTicks.last().click();
+  await window.waitForFunction(() => {
+    const element = document.querySelector(".settings-content");
+    if (!(element instanceof HTMLElement)) return false;
+    const range = element.scrollHeight - element.clientHeight;
+    return range > 0 && element.scrollTop >= range - 2;
+  });
+  await diagnosticsContent.evaluate((element) => element.scrollTo({ top: 0, behavior: "auto" }));
   await diagnosticsContent.hover();
   await window.mouse.wheel(0, 640);
   await window.waitForFunction(() => {
