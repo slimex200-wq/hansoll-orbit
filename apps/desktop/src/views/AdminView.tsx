@@ -189,6 +189,34 @@ export function AdminView({
   const [dataNotice, setDataNotice] = useState("");
   const agentLoginPollRef = useRef<number | null>(null);
   const outlookConsentPromptRef = useRef("");
+  const settingsContentRef = useRef<HTMLElement | null>(null);
+  const [settingsScroll, setSettingsScroll] = useState({ progress: 0, visible: false });
+
+  const updateSettingsScroll = (element: HTMLElement | null) => {
+    if (!element) return;
+    const scrollRange = Math.max(0, element.scrollHeight - element.clientHeight);
+    setSettingsScroll({
+      progress: scrollRange > 0 ? element.scrollTop / scrollRange : 0,
+      visible: scrollRange > 1,
+    });
+  };
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const element = settingsContentRef.current;
+      if (!element) return;
+      element.scrollTop = 0;
+      updateSettingsScroll(element);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [section]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      updateSettingsScroll(settingsContentRef.current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [audit, businessIndexStatus, buyerContext, linkedFolders.length, loading, templates.length]);
 
   const refreshLocalStateHealth = async () => {
     const health = await window.opencrab.getLocalStateHealth();
@@ -727,7 +755,13 @@ export function AdminView({
               <span>상태 새로고침</span>
             </button>
           </div>
-          <main className="settings-content" data-testid="settings-content">
+          <div className="settings-content-frame">
+          <main
+            className="settings-content"
+            data-testid="settings-content"
+            onScroll={(event) => updateSettingsScroll(event.currentTarget)}
+            ref={settingsContentRef}
+          >
             {error ? <ErrorBanner message={error} /> : null}
             {loading ? (
               <LoadingBlock label="ORBIT 상태를 점검하는 중" state="working" />
@@ -1697,6 +1731,11 @@ export function AdminView({
             </SettingsPage>
           ) : null}
           </main>
+          <SettingsScrollRail
+            progress={settingsScroll.progress}
+            visible={settingsScroll.visible}
+          />
+          </div>
         </div>
       </div>
 
@@ -1797,6 +1836,25 @@ function SettingsPage({
       </header>
       {children}
     </motion.section>
+  );
+}
+
+function SettingsScrollRail({ progress, visible }: { progress: number; visible: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={visible ? "settings-scroll-rail visible" : "settings-scroll-rail"}
+    >
+      <div className="settings-scroll-ticks">
+        {Array.from({ length: 23 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </div>
+      <span
+        className="settings-scroll-position"
+        style={{ top: `calc(${Math.min(1, Math.max(0, progress)) * 100}% - 1px)` }}
+      />
+    </div>
   );
 }
 

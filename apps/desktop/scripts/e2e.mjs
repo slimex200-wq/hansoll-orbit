@@ -138,6 +138,7 @@ const assertRecipeSelection = async (theme) => {
     return activeStyle.backgroundColor !== inactiveStyle.backgroundColor
       && activeStyle.borderColor !== inactiveStyle.borderColor;
   });
+  await window.waitForTimeout(180);
   const selection = await window.locator(".recipe-grid").evaluate((grid) => {
     const active = grid.querySelector(".recipe.active");
     const inactive = grid.querySelector(".recipe:not(.active)");
@@ -267,7 +268,7 @@ const auditProductViews = async (theme) => {
     const item = navigationItems.nth(index);
     const label = (await item.innerText()).trim().replace(/\s+/g, "-");
     await item.click();
-    await window.waitForTimeout(120);
+    await window.waitForTimeout(280);
     if (label === "업무-건") {
       const createCaseButton = window.getByRole("button", { name: "새 업무 건", exact: true });
       if (await createCaseButton.isVisible()) {
@@ -294,7 +295,7 @@ const auditProductViews = async (theme) => {
         }
       }
     }
-    if (await window.locator(".recipe-grid").count()) {
+    if (await window.locator(".recipe-grid").isVisible().catch(() => false)) {
       await assertRecipeSelection(theme);
       if (theme === "dark") {
         await window.screenshot({
@@ -1279,6 +1280,7 @@ try {
     path: path.join(outputDirectory, "23-settings-agent-providers.png"),
     fullPage: true,
   });
+  await setWindowContentSize(1440, 760);
   await settingsNavigation
     .getByRole("button", { name: "진단 및 동기화", exact: true })
     .click();
@@ -1294,13 +1296,43 @@ try {
     (await diagnosticsContent.locator(".admin-row").count()) >= 5,
     "Diagnostics no longer exposes enough user-relevant health checks.",
   );
+  await diagnosticsContent.locator(".settings-page").evaluate((element) => {
+    element.style.paddingBottom = "360px";
+  });
+  const diagnosticsScrollBefore = await diagnosticsContent.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+    frameHeight: element.parentElement?.clientHeight ?? 0,
+    mainHeight: element.parentElement?.parentElement?.clientHeight ?? 0,
+    layoutHeight: element.closest(".settings-layout")?.clientHeight ?? 0,
+    hostHeight: element.closest(".settings-content-host")?.clientHeight ?? 0,
+  }));
+  assert.ok(
+    diagnosticsScrollBefore.scrollHeight > diagnosticsScrollBefore.clientHeight,
+    `Diagnostics fixture no longer exercises overflow: ${JSON.stringify(diagnosticsScrollBefore)}`,
+  );
+  await diagnosticsContent.hover();
+  await window.mouse.wheel(0, 640);
+  await window.waitForFunction(() => {
+    const element = document.querySelector(".settings-content");
+    return element instanceof HTMLElement && element.scrollTop > 0;
+  });
+  assert.ok(
+    await diagnosticsContent.evaluate((element) => element.scrollTop > 0),
+    "Diagnostics content does not scroll with the mouse wheel.",
+  );
   await window.screenshot({
     path: path.join(outputDirectory, "08-settings-diagnostics.png"),
     fullPage: true,
   });
+  await diagnosticsContent.locator(".settings-page").evaluate((element) => {
+    element.style.paddingBottom = "";
+  });
 
   await setWindowContentSize(1440, 900);
   const settingsHeaderPositions = {};
+  const settingsAccountPositions = {};
   for (const label of [
     "계정",
     "부서 및 바이어",
@@ -1320,6 +1352,12 @@ try {
         const rect = element.getBoundingClientRect();
         return { left: Math.round(rect.left), top: Math.round(rect.top) };
       });
+    settingsAccountPositions[label] = await window
+      .locator(".settings-account-footer")
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
   }
   const settingsHeaderLefts = Object.values(settingsHeaderPositions).map((item) => item.left);
   const settingsHeaderTops = Object.values(settingsHeaderPositions).map((item) => item.top);
@@ -1330,6 +1368,16 @@ try {
   assert.ok(
     Math.max(...settingsHeaderTops) - Math.min(...settingsHeaderTops) <= 1,
     `Settings page headers shift vertically between tabs: ${JSON.stringify(settingsHeaderPositions)}`,
+  );
+  const settingsAccountLefts = Object.values(settingsAccountPositions).map((position) => position.left);
+  const settingsAccountTops = Object.values(settingsAccountPositions).map((position) => position.top);
+  assert.ok(
+    Math.max(...settingsAccountLefts) - Math.min(...settingsAccountLefts) <= 1,
+    `Settings account footer shifts horizontally between tabs: ${JSON.stringify(settingsAccountPositions)}`,
+  );
+  assert.ok(
+    Math.max(...settingsAccountTops) - Math.min(...settingsAccountTops) <= 1,
+    `Settings account footer shifts vertically between tabs: ${JSON.stringify(settingsAccountPositions)}`,
   );
 
   const appearanceSettingsButton = settingsNavigation.getByRole("button", {

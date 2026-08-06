@@ -7,6 +7,7 @@ Date: 2026-08-06
 1. Settings navigation and page-header alignment across all eight tabs.
 2. Work Agent response hierarchy and interaction for current-work queries.
 3. Zero-evidence recovery behavior for style-specific requests.
+4. Diagnostics overflow, settings scroll feedback, and account-rail stability.
 
 ## Findings and resolutions
 
@@ -26,10 +27,17 @@ Date: 2026-08-06
 - Previous risk: when no style, mail, fact, or visual evidence existed, the Agent still invented a four-step operational process and allowed it to look like a saveable work case.
 - Resolution: a server-side guardrail now returns `확인된 오늘 업무가 없습니다`, creates no reply/submit/approval tasks, and gives only two recovery actions: connect the latest mail or source, then confirm the actual work. The UI provides `Outlook 메일 갱신` and `연결 설정` actions and prevents saving until evidence exists.
 
+### 4. Diagnostics scrolling and account rail
+
+- Previous risk: the settings layout could grow with diagnostics content instead of constraining the content pane, so the lower remediation section was clipped and mouse-wheel scrolling had no effect. The account footer also depended on the flexible menu column, weakening its perceived position between tabs.
+- Resolution: the settings shell is now pinned to the available workspace bounds, only the content pane scrolls, and every tab resets to the top when selected. The account footer occupies an explicit fixed grid row. A quiet Warp-inspired tick rail appears only when the page overflows and its position marker follows real scroll progress; the native scrollbar remains available.
+- Verification: Electron E2E forces diagnostics overflow, scrolls it with a real mouse-wheel event, and checks that scrollTop changes. It also records the account footer coordinates across all eight tabs and requires horizontal and vertical variation to stay within 1px.
+
 ## Evidence
 
 - Settings connections: `outputs/desktop-e2e/07-settings-connections.png`
 - Settings Work Agent: `outputs/desktop-e2e/23-settings-agent-providers.png`
+- Scrolled diagnostics and scroll-position rail: `outputs/desktop-e2e/08-settings-diagnostics.png`
 - Agent result hierarchy: `outputs/desktop-e2e/03-agent-result.png`
 - Python behavior tests: 35 passed.
 - Desktop component/unit tests: 141 passed.
