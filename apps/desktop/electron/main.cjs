@@ -245,11 +245,12 @@ function businessIndexStatusPath() {
 function persistBusinessIndexStatus() {
   if (!app.isReady()) return;
   const target = businessIndexStatusPath();
+  const { audit: _audit, ...persistedStatus } = businessIndexStatus;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.tmp`;
   fs.writeFileSync(
     temporary,
-    JSON.stringify({ version: 1, status: businessIndexStatus }, null, 2),
+    JSON.stringify({ version: 1, status: persistedStatus }, null, 2),
     "utf8",
   );
   fs.renameSync(temporary, target);
@@ -261,7 +262,8 @@ function restoreBusinessIndexStatus() {
   try {
     const record = JSON.parse(fs.readFileSync(target, "utf8"));
     if (!record?.status || typeof record.status !== "object") return;
-    businessIndexStatus = { ...businessIndexStatus, ...record.status };
+    const { audit: _staleAudit, ...persistedStatus } = record.status;
+    businessIndexStatus = { ...businessIndexStatus, ...persistedStatus, audit: undefined };
     if (businessIndexStatus.state === "running") {
       businessIndexStatus = {
         ...businessIndexStatus,

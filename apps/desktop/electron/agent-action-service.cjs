@@ -40,6 +40,9 @@ const MUTATING_ACTIONS = new Set([
 ]);
 
 const SAFE_WHEN_MAIL_STALE = new Set([
+  "create_case",
+  "create_task",
+  "create_artifact",
   "sync_outlook",
   "initialize_indexes",
   "refresh_folder",

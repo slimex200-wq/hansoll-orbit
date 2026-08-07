@@ -99,7 +99,7 @@ test("initializes only missing desktop business indexes", async () => {
         items: [
           { name: "thin_file_index", status: ready ? "pass" : "fail" },
           { name: "style_index", status: "pass" },
-          { name: "visual_sketch_index", status: "fail" },
+          { name: "visual_sketch_index", status: ready ? "pass" : "fail" },
         ],
         next_actions: [],
       };
@@ -111,9 +111,9 @@ test("initializes only missing desktop business indexes", async () => {
 
   assert.deepEqual(
     calls.map((args) => args[0]),
-    ["audit", "build-index", "audit"],
+    ["audit", "build-index", "visual-refresh", "audit"],
   );
-  assert.deepEqual(result.completed, ["files"]);
+  assert.deepEqual(result.completed, ["files", "visuals"]);
   assert.equal(result.audit.ok, true);
   assert.equal(progress.at(-1).state, "complete");
 });

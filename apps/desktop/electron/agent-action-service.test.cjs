@@ -184,7 +184,7 @@ test("Agent action allowlist rejects email composition or sending", () => {
   );
 });
 
-test("stale mail removes every data-changing Agent proposal", () => {
+test("stale mail keeps reversible planning proposals but blocks existing-state changes", () => {
   const result = filterAgentActionsForMailFreshness([
     { type: "create_task" },
     { type: "create_artifact" },
@@ -193,8 +193,13 @@ test("stale mail removes every data-changing Agent proposal", () => {
     { type: "open_source" },
   ], true);
 
-  assert.deepEqual(result.actions.map((item) => item.type), ["sync_outlook", "open_source"]);
-  assert.equal(result.blockedCount, 3);
+  assert.deepEqual(result.actions.map((item) => item.type), [
+    "create_task",
+    "create_artifact",
+    "sync_outlook",
+    "open_source",
+  ]);
+  assert.equal(result.blockedCount, 1);
 });
 
 test("Agent rejects hidden artifact state fields before review", () => {

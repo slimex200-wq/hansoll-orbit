@@ -626,16 +626,11 @@ try {
   await window.waitForTimeout(100);
   await agentComposer.fill("271900010 최신 메일 확인");
   await window.getByRole("button", { name: "Work Agent 실행" }).click();
-  await agentPanel.getByText(/Outlook 동기화 중 · 1분 \d+초 경과/).waitFor();
-  const savedMailAnswerButton = agentPanel.getByRole("button", {
-    name: "저장된 자료로 지금 답변",
-  });
   assert.equal(
-    await savedMailAnswerButton.isEnabled(),
-    true,
-    "Saved-data answer remained disabled while Outlook was syncing.",
+    await agentPanel.locator(".agent-freshness-gate").count(),
+    0,
+    "A current-mail request was blocked instead of using the saved evidence snapshot.",
   );
-  await savedMailAnswerButton.click();
   await application.evaluate(({ BrowserWindow }, status) => {
     BrowserWindow.getAllWindows()[0].webContents.send("microsoft:status-changed", status);
   }, microsoftBeforeSyncTest);
@@ -652,12 +647,11 @@ try {
     "",
     "Agent composer was not cleared after submitting a request.",
   );
-  await window.getByText("최신 메일을 먼저 갱신해야 합니다", { exact: true }).waitFor();
-  await window.screenshot({
-    path: path.join(outputDirectory, "02-agent-mail-freshness-gate.png"),
-    fullPage: true,
-  });
-  await window.getByRole("button", { name: "저장된 자료로 지금 답변" }).click();
+  assert.equal(
+    await agentPanel.locator(".agent-freshness-gate").count(),
+    0,
+    "Saved local evidence should answer immediately without an extra confirmation click.",
+  );
   await window
     .locator('canvas[aria-label="근거를 확인하고 실행안을 정리하는 중 애니메이션"]')
     .waitFor();

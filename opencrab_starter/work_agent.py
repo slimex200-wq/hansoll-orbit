@@ -513,13 +513,17 @@ def _response_mode(query: str) -> str:
     """Distinguish a requested status digest from an instruction request."""
     normalized = " ".join(str(query or "").split())
     if re.search(
+        r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "summary"
+    if re.search(
         r"(할\s*일|해야\s*할|액션|실행|처리|초안|작성|만들어\s*줘)",
         normalized,
         re.IGNORECASE,
     ):
         return "action"
-    if re.search(r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)", normalized, re.IGNORECASE):
-        return "summary"
     return "action"
 
 

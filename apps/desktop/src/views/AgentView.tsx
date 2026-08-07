@@ -95,13 +95,6 @@ function requiresFreshMail(query: string) {
   return /(최신|최근|오늘.*메일|latest|newest|recent mail)/i.test(query);
 }
 
-function formatElapsed(seconds: number) {
-  if (seconds < 60) return `${seconds}초`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return remainingSeconds ? `${minutes}분 ${remainingSeconds}초` : `${minutes}분`;
-}
-
 function taskSourceLabel(value: string | undefined, result: WorkAgentResult): string {
   if (
     value &&
@@ -158,9 +151,7 @@ export function AgentView({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [savedCase, setSavedCase] = useState<WorkCase | null>(null);
   const [savedMerged, setSavedMerged] = useState(false);
-  const [freshnessBlocked, setFreshnessBlocked] = useState(false);
   const [answeredFromSavedMail, setAnsweredFromSavedMail] = useState(false);
-  const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [mailRefreshing, setMailRefreshing] = useState(false);
   const [modelChanging, setModelChanging] = useState(false);
   const [pendingModel, setPendingModel] =
@@ -174,7 +165,6 @@ export function AgentView({
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
-  const resumeAfterMailSyncRef = useRef(false);
 
   const clearScopedAgentErrors = () => {
     setError("");
@@ -219,7 +209,6 @@ export function AgentView({
     setError("");
     setSavedCase(null);
     setSavedMerged(false);
-    setFreshnessBlocked(false);
     setAnsweredFromSavedMail(Boolean(options.fromSavedMail));
     try {
       const response = await window.opencrab.runAgent(request);
@@ -267,70 +256,9 @@ export function AgentView({
     const request = query.trim();
     if (!request || loading || modelChanging) return;
     setQuery("");
-    if (microsoft?.syncState === "syncing" && requiresFreshMail(request)) {
-      resumeAfterMailSyncRef.current = true;
-      setSubmittedQuery(request);
-      setResult(null);
-      setFreshnessBlocked(true);
-      setAnsweredFromSavedMail(false);
-      setError("");
-      requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: 0 }));
-      return;
-    }
-    if (microsoft?.syncState === "syncing") {
-      await executeQuery(request, { fromSavedMail: true });
-      return;
-    }
-    if (requiresFreshMail(request) && audit?.ready_for_mail_dependent_work === false) {
-      setSubmittedQuery(request);
-      setResult(null);
-      setFreshnessBlocked(true);
-      setAnsweredFromSavedMail(false);
-      setError("");
-      requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: 0 }));
-      return;
-    }
-    await executeQuery(request);
-  };
-
-  useEffect(() => {
-    if (
-      !resumeAfterMailSyncRef.current
-      || !submittedQuery
-      || loading
-      || !["ready", "ready_with_warnings"].includes(microsoft?.syncState ?? "")
-    ) {
-      return;
-    }
-    resumeAfterMailSyncRef.current = false;
-    setFreshnessBlocked(false);
-    void executeQuery(submittedQuery);
-  }, [microsoft?.syncState, submittedQuery, loading]);
-
-  useEffect(() => {
-    if (microsoft?.syncState !== "syncing") {
-      setSyncElapsedSeconds(0);
-      return;
-    }
-    const parsedStartedAt = microsoft.syncStartedAt
-      ? new Date(microsoft.syncStartedAt).getTime()
-      : Date.now();
-    const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now();
-    const updateElapsed = () => {
-      setSyncElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
-    };
-    updateElapsed();
-    const timer = window.setInterval(updateElapsed, 1_000);
-    return () => window.clearInterval(timer);
-  }, [microsoft?.syncStartedAt, microsoft?.syncState]);
-
-  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
-
-  const answerFromSavedMail = async () => {
-    if (!submittedQuery || loading) return;
-    resumeAfterMailSyncRef.current = false;
-    setFreshnessBlocked(false);
-    await executeQuery(submittedQuery, { fromSavedMail: true });
+    const useSavedMail = microsoft?.syncState === "syncing"
+      || (requiresFreshMail(request) && audit?.ready_for_mail_dependent_work === false);
+    await executeQuery(request, { fromSavedMail: useSavedMail });
   };
 
   const refreshMail = async () => {
@@ -341,7 +269,6 @@ export function AgentView({
       if (ready && submittedQuery) {
         await executeQuery(submittedQuery);
       } else {
-        setFreshnessBlocked(true);
         setError("메일 갱신 후에도 최신 상태가 확인되지 않았습니다. Outlook 연결과 동기화 상태를 확인하세요.");
       }
     } catch (caught) {
@@ -603,64 +530,7 @@ export function AgentView({
       <div className="agent-panel-scroll" ref={scrollRef}>
         {error ? <ErrorBanner message={error} /> : null}
 
-        {freshnessBlocked && !loading ? (
-          <section
-            className="agent-freshness-gate"
-            role={microsoft?.syncState === "syncing" ? "status" : "alert"}
-          >
-            <AlertTriangle size={20} />
-            <div>
-              <strong>
-                {microsoft?.syncState === "syncing"
-                  ? `Outlook 동기화 중 · ${formatElapsed(syncElapsedSeconds)} 경과`
-                  : hasPartialMailSource
-                    ? "신형 Outlook 원본 연결이 필요합니다"
-                    : "최신 메일을 먼저 갱신해야 합니다"}
-              </strong>
-              <p>
-                {microsoft?.syncState === "syncing"
-                  ? "최신 메일이 필요한 질문만 보관했습니다. 다른 화면과 일반 질문은 계속 사용할 수 있으며, 아래 버튼으로 저장된 자료 기준 답변을 바로 받을 수도 있습니다."
-                  : hasPartialMailSource
-                    ? "현재 Classic Outlook 로컬 캐시에는 신형 Outlook의 메일이 일부 누락됩니다. 이 상태에서는 발신자별 메일 건수와 요약을 확정할 수 없습니다."
-                  : "현재 메일 자료가 오래되어 최신 상태로 단정할 수 없습니다. Outlook을 갱신한 뒤 답변을 다시 실행하세요."}
-              </p>
-              <div className="freshness-actions">
-                <button
-                  className="primary-button"
-                  disabled={mailRefreshing || microsoft?.syncState === "syncing"}
-                  onClick={() =>
-                    microsoft?.configured
-                    && microsoft.state === "connected"
-                    && !hasPartialMailSource
-                      ? void refreshMail()
-                      : onOpenMailSettings()
-                  }
-                  type="button"
-                >
-                  {microsoft?.configured
-                  && microsoft.state === "connected"
-                  && !hasPartialMailSource
-                    ? mailRefreshing || microsoft?.syncState === "syncing"
-                      ? "메일 갱신 중"
-                      : "최신 메일 가져오기"
-                    : hasPartialMailSource
-                      ? "Microsoft 365 연결 확인"
-                      : "Outlook 연결 설정"}
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={loading || !submittedQuery}
-                  onClick={() => void answerFromSavedMail()}
-                  type="button"
-                >
-                  저장된 자료로 지금 답변
-                </button>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {!result && !loading && !freshnessBlocked ? (
+        {!result && !loading ? (
           <div className="agent-empty">
             <Bot size={28} />
             <strong>무엇을 확인할까요?</strong>

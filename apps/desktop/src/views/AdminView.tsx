@@ -628,6 +628,12 @@ export function AdminView({
       }).format(new Date(microsoft.lastSyncAt))
     : "아직 동기화하지 않음";
 
+  const microsoftConnected = microsoft?.state === "connected";
+  const usesDesktopOutlook = microsoft?.authMode === "outlook_desktop";
+  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
+  const partialMailCount = microsoft?.lastSyncResult?.totalMessages ?? 0;
+  const outlookConsentRequired = usesDesktopOutlook && microsoft?.consentRequired === true;
+  const displayedMicrosoftAccount = microsoft?.account || microsoft?.detectedAccount || null;
   const agentDiagnosticStatus: "pass" | "warn" =
     agentStatus?.mode === "model_ready" ? "pass" : "warn";
   const agentDiagnosticDetail =
@@ -639,9 +645,16 @@ export function AdminView({
       ? "warn"
       : microsoft.syncState === "error" || microsoft.syncState === "needs_sign_in"
         ? "fail"
-        : microsoft.syncState === "ready_with_warnings" || microsoft.syncState === "syncing"
+        : microsoft.syncState === "ready_with_warnings" && !hasPartialMailSource
           ? "warn"
           : "pass";
+  const outlookDiagnosticLabel = microsoft?.syncState === "syncing"
+    ? "동기화 중"
+    : outlookDiagnosticStatus === "pass"
+      ? "정상"
+      : outlookDiagnosticStatus === "fail"
+        ? "사용 불가"
+        : "연결 확인";
   const outlookDiagnosticDetail =
     microsoft?.state === "connected"
       ? microsoft.syncState === "syncing"
@@ -653,16 +666,11 @@ export function AdminView({
         ? `${microsoft.detectedAccount?.username ?? "Outlook 계정"} · 최초 연결 승인 필요`
         : "Outlook 회사 계정 연결이 필요합니다.";
 
-  const microsoftConnected = microsoft?.state === "connected";
-  const usesDesktopOutlook = microsoft?.authMode === "outlook_desktop";
-  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
-  const partialMailCount = microsoft?.lastSyncResult?.totalMessages ?? 0;
-  const outlookConsentRequired = usesDesktopOutlook && microsoft?.consentRequired === true;
-  const displayedMicrosoftAccount = microsoft?.account || microsoft?.detectedAccount || null;
   const businessIndexesPreparing = businessIndexStatus?.state === "running";
   const businessIndexNames = new Set([
     "thin_file_index",
     "style_index",
+    "visual_sketch_index",
   ]);
   const hasBusinessIndexProblems = (audit?.items ?? []).some(
     (item) => businessIndexNames.has(item.name) && item.status !== "pass",
@@ -1502,7 +1510,7 @@ export function AdminView({
                     </div>
                     <Badge
                       tone={agentDiagnosticStatus === "pass" ? "success" : "warning"}
-                      value={agentDiagnosticStatus === "pass" ? "정보성" : "품질 저하"}
+                      value={agentDiagnosticStatus === "pass" ? "정상" : "대체 모드"}
                     />
                   </div>
                   <div className="admin-row">
@@ -1531,11 +1539,7 @@ export function AdminView({
                             : "warning"
                       }
                       value={
-                        outlookDiagnosticStatus === "pass"
-                            ? "정보성"
-                            : outlookDiagnosticStatus === "fail"
-                              ? "업무 차단"
-                              : "품질 저하"
+                        outlookDiagnosticLabel
                       }
                     />
                   </div>
@@ -1571,10 +1575,10 @@ export function AdminView({
                         }
                         value={
                           item.status === "pass"
-                            ? "정보성"
+                            ? "정상"
                             : item.status === "warn"
-                              ? "품질 저하"
-                              : "업무 차단"
+                              ? "확인 필요"
+                              : "사용 불가"
                         }
                       />
                     </div>

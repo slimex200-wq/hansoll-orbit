@@ -324,11 +324,22 @@ def check_style_parse_health(db_path: Path) -> PreflightCheck:
             f"{dependency_error_count} style source files failed because parser dependencies are unavailable",
             evidence,
         )
-    if other_error_count:
+    usable_file_count = total_files - error_count
+    file_error_rate = other_error_count / total_files
+    evidence["usable_file_count"] = usable_file_count
+    evidence["file_error_rate"] = file_error_rate
+    if other_error_count and not (usable_file_count > 0 and file_error_rate <= 0.001):
         return PreflightCheck(
             "style_parse_health",
             "warn",
             f"{other_error_count} style source files have non-dependency parse errors",
+            evidence,
+        )
+    if other_error_count:
+        return PreflightCheck(
+            "style_parse_health",
+            "pass",
+            f"{usable_file_count} style source files are readable; {other_error_count} isolated invalid or locked files were skipped",
             evidence,
         )
     return PreflightCheck(

@@ -445,6 +445,14 @@ class AgentSynthesisTests(unittest.TestCase):
         self.assertIn("Do not use imperative Korean endings", prompt)
         self.assertIn("Do not turn a summary request into a plan", prompt)
 
+    def test_mixed_today_work_list_request_prefers_summary_contract(self) -> None:
+        prompt = build_synthesis_prompt(
+            {"query": "233900002 오늘 해야 할 일만 우선순위대로 정리해줘"}
+        )
+
+        self.assertIn("This is a summary/status request", prompt)
+        self.assertIn("Do not use imperative Korean endings", prompt)
+
     def test_summary_validation_rejects_answer_that_delegates_every_step(self) -> None:
         payload = {
             "summary": "GAC 위험 후보와 회신 대기 후보가 있으나 원본 확인이 필요합니다.",
