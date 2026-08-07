@@ -19,6 +19,7 @@ import {
   Search,
   Settings2,
 } from "lucide-react";
+import { motion } from "motion/react";
 import type { AgentConnectionStatus, AuditResult, ViewId } from "../types";
 
 const navigation: Array<{
@@ -210,13 +211,21 @@ export function Shell({
           <nav aria-label="주요 메뉴">
             {navigation.map((item) => {
               const Icon = item.icon;
+              const active = view === item.id || (item.id === "tasks" && view === "timeline");
               return (
                 <button
-                  className={view === item.id || (item.id === "tasks" && view === "timeline") ? "nav-item active" : "nav-item"}
+                  className={active ? "nav-item active" : "nav-item"}
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
                   type="button"
                 >
+                  {active ? (
+                    <motion.span
+                      className="nav-active-surface"
+                      layoutId="primary-navigation-active"
+                      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  ) : null}
                   <Icon size={17} />
                   <span>{item.label}</span>
                 </button>
@@ -226,11 +235,13 @@ export function Shell({
           <div className="sidebar-footer">
             <span className={`health-dot ${audit?.ok && audit?.ready_for_mail_dependent_work ? "healthy" : "warning"}`} />
             <div>
-              <strong>{audit?.ok && audit?.ready_for_mail_dependent_work ? "환경 정상" : audit?.ok ? "업무 일부 제한" : "점검 필요"}</strong>
+              <strong>{audit?.ok && audit?.ready_for_mail_dependent_work ? "업무 준비 완료" : audit?.ok ? "로컬 자료 사용 가능" : "환경 점검 필요"}</strong>
               <span>
                 {audit?.ready_for_mail_dependent_work
                   ? "메일 최신"
-                  : "메일 확인 필요"}
+                  : audit?.ok
+                    ? "Microsoft 365 확인 필요"
+                    : "관리에서 연결 확인"}
               </span>
             </div>
           </div>

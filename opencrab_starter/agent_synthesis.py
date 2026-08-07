@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .mail_history import extract_style_numbers
+from .ontology_runtime import build_query_subgraph
 
 
 DEFAULT_MODELS = {
@@ -191,7 +192,12 @@ def synthesize_answer(
     packet = build_evidence_packet(judgment, draft, app_context=app_context)
     prompt = build_synthesis_prompt(packet)
     cache_key = _cache_key(selected_provider, selected_model, packet)
-    cached = _read_cache(cache_key, selected_provider, selected_model)
+    cached = _read_cache(
+        cache_key,
+        selected_provider,
+        selected_model,
+        response_mode=str(packet.get("response_mode") or "action"),
+    )
     if cached is not None:
         answer = merge_synthesis(draft, cached)
         if packet.get("target_missing"):
@@ -216,11 +222,14 @@ def synthesize_answer(
     raw = selected_runner(
         prompt,
         selected_model,
-        _schema_path(),
+        _schema_path(str(packet.get("response_mode") or "action")),
         selected_timeout,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
-    validated = validate_synthesis(raw)
+    validated = validate_synthesis(
+        raw,
+        response_mode=str(packet.get("response_mode") or "action"),
+    )
     _write_cache(cache_key, selected_provider, selected_model, validated)
     answer = merge_synthesis(draft, validated)
     if packet.get("target_missing"):
@@ -251,11 +260,15 @@ def build_evidence_packet(
         app_context,
         classification,
     )
+    query_ontology = _sanitize_ontology(
+        build_query_subgraph(judgment, filtered_app_context)
+    )
     target_missing = bool(classification.get("requires_style")) and not (
         classification.get("styles") or []
     )
     packet = {
         "query": _clean_text(judgment.get("query"), 2_000),
+        "response_mode": _response_mode(str(judgment.get("query") or "")),
         "classification": _copy_fields(
             classification,
             ["styles", "primary_concept", "secondary_concepts", "mail_scope"],
@@ -265,6 +278,7 @@ def build_evidence_packet(
             ["confidence", "risks", "clarification_hooks", "policies"],
         ),
         "target_missing": target_missing,
+        "query_ontology": query_ontology,
         "style_controls": (
             [] if target_missing else [_compact_style_card(card) for card in cards[:8]]
         ),
@@ -282,11 +296,8 @@ def build_evidence_packet(
                 [] if target_missing else _compact_hits(evidence, "visual_index", 3)
             ),
         },
-        "deterministic_draft": {
+        "deterministic_controls": {
             "status": draft.get("status"),
-            "summary": _clean_text(draft.get("summary"), 1_500),
-            "recommendation": draft.get("recommendation") or {},
-            "action_plan": draft.get("action_plan") or [],
             "confirmations": draft.get("confirmations") or [],
             "deliverables": draft.get("deliverables") or [],
             "visible_findings": (
@@ -343,6 +354,10 @@ def build_evidence_packet(
             rows.pop()
     for section in ("tasks", "milestones", "artifacts", "decisions", "cases"):
         rows = packet["app_context"].get(section) or []
+        while rows and len(json.dumps(packet, ensure_ascii=False)) > MAX_PROMPT_CHARS - 1_000:
+            rows.pop()
+    for section in ("assertions", "relations", "entities"):
+        rows = packet["query_ontology"].get(section) or []
         while rows and len(json.dumps(packet, ensure_ascii=False)) > MAX_PROMPT_CHARS - 1_000:
             rows.pop()
     after_counts = {
@@ -452,12 +467,50 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
             "No buyer has been confirmed. Do not assume Talbots/MGF terminology, workflow, "
             "approval stages, or templates. Ask for the buyer only when it is required to act.\n\n"
         )
+    response_mode = str(
+        packet.get("response_mode")
+        or _response_mode(str(packet.get("query") or ""))
+    )
+    response_contract = (
+        "This is a summary/status request. The operator must perform the classification and "
+        "return the result now; never delegate source inspection or classification back to the "
+        "user. Use results as zero to eight ranked findings. Each result must state the object, "
+        "current status, finding and reason, supporting source, and only the remaining unknown. "
+        "An empty results array is valid when the ontology contains no supported candidate. "
+        "Do not use imperative Korean endings "
+        "such as '~하세요', '~확인하세요', or '~분리하세요'. If evidence is incomplete, still "
+        "list source-backed candidates with Candidate/TBD/Waiting/Chase Needed status, then put "
+        "only the minimum source limitation in confirmations. recommendation.next_move is a "
+        "short optional follow-up, never the main answer.\n\n"
+        if response_mode == "summary"
+        else (
+            "This is an action request. Rank actions in actual execution order. Use concise "
+            "imperative titles and include the specific Style, stage, source, field, recipient "
+            "role, or artifact affected.\n\n"
+        )
+    )
     return (
         operator_role
         + "Use only the "
         "evidence packet below to make an operator decision in concise, natural Korean. "
-        "The answer must tell the user what to do, not merely describe what was found.\n\n"
+        "The answer must directly satisfy the requested outcome.\n\n"
         + buyer_rule
+        + response_contract
+        + "Ontology contract:\n"
+        "- query_ontology is the primary reasoning substrate. Follow its entities, typed "
+        "relations, assertions, provenance, saved work memory, and nine-space grammar before "
+        "writing the answer.\n"
+        "- Resolve the user's question from the relevant subgraph. Do not ask the user to repeat "
+        "classification or source-joining work already represented in the graph.\n"
+        "- An enabled DecisionRule linked by HAS_APPLICABLE_RULE is reusable operator policy. "
+        "Apply its outcome before creating a new confirmation or pending decision. Ignore disabled "
+        "or unlinked rules; if current direct evidence conflicts, preserve the conflict and ask only "
+        "for the dependent clarification.\n"
+        "- deterministic_controls contains safety gates and controlled deliverable states only. "
+        "It is not an answer template, recommendation, or action plan. Do not imitate missing "
+        "wording from it.\n"
+        "- A direct assertion is observed evidence. A derived state must be explainable from direct "
+        "assertions. An inference remains explicitly uncertain.\n\n"
         + "Decision contract:\n"
         "1. Start summary with the direct current-state conclusion. In the same paragraph, "
         "name the decisive source and why it controls the decision.\n"
@@ -465,8 +518,8 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
         "recommendation.conclusion must state what is ready, what is not, and the reason.\n"
         "3. recommendation.next_move must name the owner, object, condition, and timing. "
         "Default owner is '담당자' unless evidence names a safe business role.\n"
-        "4. Rank actions in actual execution order. Use imperative titles and include the "
-        "specific Style, stage, source, field, recipient role, or artifact affected.\n"
+        "4. Follow the response-mode contract above. Do not turn a summary request into a plan "
+        "for the user to perform.\n"
         "5. Every action needs an observable completion check: a decided stage, a populated "
         "field list, a saved draft, a reconciled value, or a named approval gate. "
         "Phrases such as '확인 완료' or '처리 완료' alone are not acceptable.\n"
@@ -477,7 +530,7 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
         "that can be filled now, values that remain TBD, and the next review or dispatch step.\n"
         "8. Cite the primary source filename or mail subject/date, plus concrete styles, "
         "stages, comments, quantities, or dates that are actually present. Prefer a source "
-        "listed in deterministic_draft.visible_findings as the named primary source so the "
+        "listed in deterministic_controls.visible_findings as the named primary source so the "
         "answer and the source cards shown in the UI stay aligned.\n"
         "9. Surface source conflicts explicitly and apply source/date priority from the packet. "
         "Do not average or silently choose conflicting values.\n"
@@ -525,8 +578,9 @@ def build_synthesis_prompt(packet: dict[str, Any]) -> str:
         "the requested artifacts blocked.\n\n"
         "Never expose implementation terms such as evidence packet, target_missing, "
         "deterministic draft, JSON schema, model, cache, or guardrail in user-facing text.\n\n"
-        "Follow the supplied JSON schema exactly. Return 2 to 5 action steps in "
-        "execution order.\n"
+        "Follow the supplied response-mode JSON schema exactly. For action mode, return 2 to 5 "
+        "action steps in execution order. For summary mode, return result rows rather than action "
+        "steps.\n"
         "Evidence packet:\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )
@@ -655,37 +709,62 @@ def run_claude_synthesis(
     raise AgentSynthesisError("Claude synthesis did not return structured output")
 
 
-def validate_synthesis(payload: dict[str, Any]) -> dict[str, Any]:
+def validate_synthesis(
+    payload: dict[str, Any],
+    *,
+    response_mode: str = "action",
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AgentSynthesisError("model synthesis must be a JSON object")
     if "\ufffd" in json.dumps(payload, ensure_ascii=False):
         raise AgentSynthesisError("model synthesis contains invalid Unicode")
     recommendation = payload.get("recommendation")
     action_plan = payload.get("action_plan")
+    results = payload.get("results")
     confirmations = payload.get("confirmations")
     summary = payload.get("summary")
     if not isinstance(summary, str) or len(summary.strip()) < 20:
         raise AgentSynthesisError("model summary is missing or too short")
     if not isinstance(recommendation, dict):
         raise AgentSynthesisError("model recommendation is missing")
-    for key in ("state", "title", "conclusion", "next_move"):
+    for key in ("state", "title", "conclusion"):
         if not isinstance(recommendation.get(key), str) or not recommendation[key].strip():
             raise AgentSynthesisError(f"model recommendation.{key} is missing")
-    if not isinstance(action_plan, list) or not 2 <= len(action_plan) <= 5:
-        raise AgentSynthesisError("model action_plan must have 2 to 5 steps")
-    generic_steps = 0
-    for index, step in enumerate(action_plan):
-        if not isinstance(step, dict):
-            raise AgentSynthesisError(f"model action_plan[{index}] is invalid")
-        for key in ("title", "instruction", "completion_check", "state"):
-            if not isinstance(step.get(key), str) or not step[key].strip():
-                raise AgentSynthesisError(f"model action_plan[{index}].{key} is missing")
-        if _is_generic_action(step):
-            generic_steps += 1
-    if generic_steps == len(action_plan):
-        raise AgentSynthesisError(
-            "model action_plan is generic and does not identify an executable outcome"
-        )
+    if not isinstance(recommendation.get("next_move"), str) or (
+        response_mode != "summary" and not recommendation["next_move"].strip()
+    ):
+        raise AgentSynthesisError("model recommendation.next_move is missing")
+    if response_mode == "summary":
+        if not isinstance(results, list) or len(results) > 8:
+            raise AgentSynthesisError("model results must have zero to 8 rows")
+        for index, row in enumerate(results):
+            if not isinstance(row, dict):
+                raise AgentSynthesisError(f"model results[{index}] is invalid")
+            for key in ("title", "status", "detail", "evidence", "remaining_unknown"):
+                if not isinstance(row.get(key), str):
+                    raise AgentSynthesisError(f"model results[{index}].{key} is missing")
+            if not all(str(row.get(key) or "").strip() for key in ("title", "status", "detail", "evidence")):
+                raise AgentSynthesisError(f"model results[{index}] is incomplete")
+        if _summary_response_delegates_work(payload):
+            raise AgentSynthesisError(
+                "model summary delegates classification work instead of returning results"
+            )
+    else:
+        if not isinstance(action_plan, list) or not 2 <= len(action_plan) <= 5:
+            raise AgentSynthesisError("model action_plan must have 2 to 5 steps")
+        generic_steps = 0
+        for index, step in enumerate(action_plan):
+            if not isinstance(step, dict):
+                raise AgentSynthesisError(f"model action_plan[{index}] is invalid")
+            for key in ("title", "instruction", "completion_check", "state"):
+                if not isinstance(step.get(key), str) or not step[key].strip():
+                    raise AgentSynthesisError(f"model action_plan[{index}].{key} is missing")
+            if _is_generic_action(step):
+                generic_steps += 1
+        if generic_steps == len(action_plan):
+            raise AgentSynthesisError(
+                "model action_plan is generic and does not identify an executable outcome"
+            )
     if not isinstance(confirmations, list) or any(
         not isinstance(item, str) for item in confirmations
     ):
@@ -761,20 +840,52 @@ def merge_synthesis(
         [*deterministic_confirmations, *model_confirmations]
     )[:8]
 
-    raw_steps = synthesis["action_plan"]
-    action_plan = [
-        {
-            "order": index,
-            "title": _clean_text(step["title"], 100),
-            "instruction": _clean_text(step["instruction"], 600),
-            "completion_check": _clean_text(step["completion_check"], 240),
-            "state": _guard_step_state(
-                str(step["state"]),
-                confirmations=deterministic_confirmations,
-            ),
-        }
-        for index, step in enumerate(raw_steps, start=1)
-    ]
+    summary_results = synthesis.get("results")
+    if isinstance(summary_results, list):
+        action_plan = [
+            {
+                "order": index,
+                "title": _clean_text(
+                    f"{row['title']} · {row['status']}",
+                    100,
+                ),
+                "instruction": _clean_text(row["detail"], 600),
+                "completion_check": _clean_text(
+                    " · ".join(
+                        value
+                        for value in (
+                            f"근거: {row['evidence']}",
+                            (
+                                f"미확정: {row['remaining_unknown']}"
+                                if row.get("remaining_unknown")
+                                else ""
+                            ),
+                        )
+                        if value
+                    ),
+                    240,
+                ),
+                "state": (
+                    "needs_confirmation" if row.get("remaining_unknown") else "do_now"
+                ),
+            }
+            for index, row in enumerate(summary_results, start=1)
+        ]
+    else:
+        raw_steps = synthesis["action_plan"]
+        action_plan = [
+            {
+                "order": index,
+                "title": _clean_text(step["title"], 100),
+                "instruction": _clean_text(step["instruction"], 600),
+                "completion_check": _clean_text(step["completion_check"], 240),
+                "state": _guard_step_state(
+                    str(step["state"]),
+                    confirmations=deterministic_confirmations,
+                ),
+            }
+            for index, step in enumerate(raw_steps, start=1)
+        ]
 
     recommendation = {
         "state": _guard_recommendation_state(
@@ -789,17 +900,24 @@ def merge_synthesis(
     answer["summary"] = _clean_text(synthesis["summary"], 900)
     answer["recommendation"] = recommendation
     answer["action_plan"] = action_plan
+    answer["summary_results"] = summary_results or []
     answer["confirmations"] = confirmations
     answer["status"] = (
         "needs_confirmation"
         if confirmations
         else str(draft.get("status") or "needs_review")
     )
-    answer["task_suggestions"] = _tasks_from_steps(
-        action_plan,
-        due_at=_draft_due_at(draft),
+    answer["task_suggestions"] = (
+        []
+        if isinstance(summary_results, list)
+        else _tasks_from_steps(action_plan, due_at=_draft_due_at(draft))
     )
-    answer["answer_text"] = _answer_text(recommendation, action_plan, confirmations)
+    answer["answer_text"] = _answer_text(
+        recommendation,
+        action_plan,
+        confirmations,
+        response_mode=("summary" if isinstance(summary_results, list) else "action"),
+    )
     answer["app_actions"] = [
         {
             "id": f"agent_action_{index}",
@@ -1010,6 +1128,20 @@ def _copy_fields(source: dict[str, Any], fields: list[str]) -> dict[str, Any]:
     return {field: source.get(field) for field in fields if field in source}
 
 
+def _sanitize_ontology(value: Any, *, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            str(item_key): _sanitize_ontology(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_ontology(item, key=key) for item in value]
+    if isinstance(value, str):
+        limit = 700 if key in {"value", "summary", "instruction"} else 500
+        return _clean_text(value, limit)
+    return value
+
+
 def _clean_text(value: Any, limit: int) -> str:
     text = " ".join(str(value or "").replace("\x00", " ").split())
     text = re.sub(
@@ -1075,12 +1207,16 @@ def _answer_text(
     recommendation: dict[str, str],
     action_plan: list[dict[str, Any]],
     confirmations: list[str],
+    *,
+    response_mode: str = "action",
 ) -> str:
     parts = [
         f"현재 판단: {recommendation['title']}",
         recommendation["conclusion"],
-        "실행 순서: " + " / ".join(step["title"] for step in action_plan),
     ]
+    if action_plan:
+        label = "정리 결과" if response_mode == "summary" else "실행 순서"
+        parts.append(f"{label}: " + " / ".join(step["title"] for step in action_plan))
     if confirmations:
         parts.append("확인 필요: " + " / ".join(confirmations))
     return "\n".join(parts)
@@ -1098,11 +1234,16 @@ def _ordered_unique(values: list[str]) -> list[str]:
     return result
 
 
-def _schema_path() -> Path:
+def _schema_path(response_mode: str = "action") -> Path:
+    filename = (
+        "work_agent_summary_synthesis.schema.json"
+        if response_mode == "summary"
+        else "work_agent_synthesis.schema.json"
+    )
     return (
         Path(__file__).resolve().parents[1]
         / "knowledge"
-        / "work_agent_synthesis.schema.json"
+        / filename
     )
 
 
@@ -1225,7 +1366,7 @@ def _codex_home() -> Path:
 def _cache_key(provider: str, model: str, packet: dict[str, Any]) -> str:
     material = json.dumps(
         {
-            "schema_version": 5,
+            "schema_version": 6,
             "provider": provider,
             "model": model,
             "packet": packet,
@@ -1248,6 +1389,8 @@ def _read_cache(
     cache_key: str,
     provider: str,
     model: str,
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any] | None:
     path = _cache_root() / f"{cache_key}.json"
     if not path.exists():
@@ -1257,7 +1400,7 @@ def _read_cache(
         if record.get("provider") != provider or record.get("model") != model:
             return None
         payload = record.get("payload")
-        return validate_synthesis(payload)
+        return validate_synthesis(payload, response_mode=response_mode)
     except (OSError, json.JSONDecodeError, AgentSynthesisError):
         return None
 
@@ -1282,8 +1425,19 @@ def _write_cache(
 
 def _mask_phone_candidate(match: re.Match[str]) -> str:
     candidate = match.group(0)
-    digit_count = sum(character.isdigit() for character in candidate)
-    return "[phone omitted]" if digit_count >= 10 else candidate
+    digits = "".join(character for character in candidate if character.isdigit())
+    compact = candidate.strip()
+    looks_international = compact.startswith("+")
+    looks_korean_mobile = len(digits) in {10, 11} and digits.startswith("01")
+    looks_separated_phone = (
+        len(digits) in {10, 11}
+        and bool(re.fullmatch(r"0\d{1,2}[ .()-]+\d{3,4}[ .()-]+\d{4}", compact))
+    )
+    return (
+        "[phone omitted]"
+        if looks_international or looks_korean_mobile or looks_separated_phone
+        else candidate
+    )
 
 
 def _strip_json_fence(value: str) -> str:
@@ -1324,3 +1478,54 @@ def _is_generic_action(step: dict[str, Any]) -> bool:
         flags=re.IGNORECASE,
     )
     return generic_title and generic_completion and concrete_signal is None
+
+
+def _response_mode(query: str) -> str:
+    normalized = " ".join(str(query or "").split())
+    if re.search(
+        r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "summary"
+    if re.search(
+        r"(할\s*일|해야\s*할|액션|실행|처리|초안|작성|만들어\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "action"
+    return "action"
+
+
+def _summary_response_delegates_work(payload: dict[str, Any]) -> bool:
+    steps = payload.get("results") or payload.get("action_plan") or []
+    if not steps:
+        return False
+    imperative = 0
+    for step in steps:
+        text = " ".join(
+            str((step or {}).get(key) or "")
+            for key in ("title", "detail", "instruction")
+        )
+        if re.search(r"(?:하세요|하십시오|해\s*주세요|확인하세요|분리하세요)(?:\.|$)", text):
+            imperative += 1
+    if imperative < max(1, (len(steps) + 1) // 2):
+        return False
+    result_text = " ".join(
+        [
+            str(payload.get("summary") or ""),
+            str((payload.get("recommendation") or {}).get("conclusion") or ""),
+            *(
+                str((step or {}).get("detail") or (step or {}).get("instruction") or "")
+                for step in steps
+            ),
+        ]
+    )
+    has_result_classification = bool(
+        re.search(
+            r"(위험\s*후보|회신\s*대기|Chase\s*Needed|Waiting|TBD|확정|완료|자료\s*없음)",
+            result_text,
+            re.IGNORECASE,
+        )
+    )
+    return not has_result_classification or imperative == len(steps)

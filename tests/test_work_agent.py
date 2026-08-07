@@ -11,6 +11,41 @@ from opencrab_starter.work_agent import (
 
 
 class WorkAgentAnswerTests(unittest.TestCase):
+    def test_current_style_work_without_evidence_returns_source_recovery_only(
+        self,
+    ) -> None:
+        judgment = {
+            "query": "233900002에 대해서 오늘 해야할거 리스트업좀",
+            "classification": {
+                "styles": ["233900002"],
+                "primary_concept": "mail_followup",
+                "requires_style": True,
+                "current_work_query": True,
+                "mail_scope": {},
+            },
+            "evidence_summary": {
+                "style_index": {"hit_count": 0, "top_hits": []},
+                "fact_index": {"hit_count": 0, "top_hits": []},
+                "visual_index": {"hit_count": 0, "top_hits": []},
+                "mail_index": {"hit_count": 0, "top_hits": []},
+            },
+            "style_evidence_cards": [],
+            "decisions": {"confidence": "low", "risks": [], "clarification_hooks": []},
+        }
+
+        with patch("opencrab_starter.work_agent.judge_query", return_value=judgment):
+            result = answer_query(object(), judgment["query"], use_model=False)
+
+        answer = result["answer"]
+        serialized = str(answer)
+        self.assertEqual(answer["recommendation"]["title"], "233900002의 확인된 오늘 업무가 없습니다.")
+        self.assertEqual(answer["response_mode"], "summary")
+        self.assertEqual(answer["action_plan"], [])
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertNotIn("Submit form", serialized)
+        self.assertNotIn("dispatch", serialized.casefold())
+        self.assertEqual(answer["app_actions"], [])
+
     def test_scoped_sender_zero_hits_are_unverified_when_mail_source_is_partial(
         self,
     ) -> None:
@@ -208,7 +243,7 @@ class WorkAgentAnswerTests(unittest.TestCase):
         self.assertIn("TBD", answer["action_plan"][1]["instruction"])
         self.assertIn("최종본", answer["action_plan"][3]["title"])
 
-    def test_composes_korean_answer_with_latest_mail_and_tasks(self) -> None:
+    def test_composes_korean_summary_with_latest_mail_and_today_work(self) -> None:
         judgment = {
             "query": "271900010 최신 메일과 파일 확인하고 오늘 할 일 정리",
             "classification": {
@@ -269,9 +304,10 @@ class WorkAgentAnswerTests(unittest.TestCase):
         self.assertIn("가장 관련성 높은 최근 메일", answer["summary"])
         self.assertIn("Please review comments.", answer["summary"])
         self.assertNotIn("Unrelated newer mail.", answer["summary"])
-        self.assertTrue(answer["task_suggestions"])
-        self.assertTrue(all("Check latest" not in item["title"] for item in answer["task_suggestions"]))
-        self.assertTrue(all(item["due_at"] for item in answer["task_suggestions"]))
+        self.assertEqual(answer["response_mode"], "summary")
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertTrue(answer["summary_results"])
+        self.assertNotIn("하세요", str(answer["action_plan"]))
 
     def test_costing_prefers_costing_source_and_cost_relevant_mail(self) -> None:
         judgment = {
@@ -580,14 +616,44 @@ class WorkAgentAnswerTests(unittest.TestCase):
         answer = compose_answer(judgment)
 
         self.assertEqual(answer["status"], "needs_review")
+        self.assertEqual(answer["response_mode"], "summary")
         self.assertNotIn("확인할 Style 번호", answer["confirmations"])
         self.assertIn("현재 검색 상위 행의 GAC 1건", answer["summary"])
-        self.assertTrue(
-            any(
-                "기한 경과·이번 주 GAC 후보 분리" in item["title"]
-                for item in answer["task_suggestions"]
-            )
-        )
+        self.assertEqual(answer["action_plan"][0]["title"], "254730065 · GAC 위험 후보")
+        self.assertIn("GAC 10/13/2026", answer["action_plan"][0]["instruction"])
+        self.assertNotIn("하세요", str(answer["action_plan"]))
+        self.assertIn("정리했습니다", answer["recommendation"]["title"])
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertEqual(len(answer["summary_results"]), 1)
+        self.assertIn("정리 결과:", answer["answer_text"])
+        self.assertNotIn("실행 순서:", answer["answer_text"])
+
+    def test_mixed_today_work_list_request_returns_summary_results(self) -> None:
+        judgment = {
+            "query": "233900002 오늘 해야 할 일만 우선순위대로 정리해줘",
+            "classification": {
+                "styles": ["233900002"],
+                "primary_concept": "mail_followup",
+            },
+            "evidence_summary": {
+                "style_index": {"hit_count": 0, "top_hits": []},
+                "fact_index": {"hit_count": 0, "top_hits": []},
+                "visual_index": {"hit_count": 0, "top_hits": []},
+                "mail_index": {"hit_count": 0, "top_hits": []},
+            },
+            "style_evidence_cards": [],
+            "decisions": {
+                "confidence": "low",
+                "risks": [],
+                "clarification_hooks": [],
+            },
+        }
+
+        answer = compose_answer(judgment)
+
+        self.assertEqual(answer["response_mode"], "summary")
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertIn("정리 결과:", answer["answer_text"])
 
 
 class AnswerSubjectTests(unittest.TestCase):

@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   TableProperties,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Badge,
   CaseSelect,
@@ -220,6 +221,13 @@ function pendingDecisionLabels(workCase: WorkCaseWithDecisions | null): string[]
   });
 }
 
+function artifactApprovalBlockReason(state: DomainState, caseId: string): string {
+  const workCase = state.cases.find((item) => item.id === caseId);
+  if (workCase?.status === "blocked") return "업무 건의 보류 사유를 먼저 해결하세요.";
+  const pending = pendingDecisionLabels((workCase ?? null) as WorkCaseWithDecisions | null);
+  return pending.length ? `최종 승인 전 결정 ${pending.length}건을 확정하세요.` : "";
+}
+
 export function ArtifactsView({
   state,
   onStateChanged,
@@ -256,14 +264,12 @@ export function ArtifactsView({
   const pendingDecisions = useMemo(() => pendingDecisionLabels(selectedCase), [selectedCase]);
   const selectedRecipe = recipes.find((item) => item.id === type) ?? recipes[0];
   const SelectedRecipeIcon = selectedRecipe.icon;
-  const requiresResolvedDecisions = true;
-  const registrationBlockReason =
-    requiresResolvedDecisions && selectedCase?.status === "blocked"
-      ? "이 업무 건은 보류 상태입니다. 보류 사유를 해결하고 상태를 변경해야 합니다."
-      : requiresResolvedDecisions && pendingDecisions.length
-        ? `산출물 등록 전 다음 결정을 확정하세요: ${pendingDecisions.join("; ")}`
+  const draftWarning =
+    selectedCase?.status === "blocked"
+      ? "이 업무 건은 보류 상태입니다. 초안과 원본 사본은 만들 수 있지만 최종 승인 전 보류 사유를 해결해야 합니다."
+      : pendingDecisions.length
+        ? `결정 ${pendingDecisions.length}건이 남아 있습니다. 미확정 값은 TBD로 두고 초안을 만든 뒤 최종 승인 전에 확정하세요.`
         : "";
-  const hasNonBlockingCaseWarning = false;
 
   useEffect(() => {
     let active = true;
@@ -381,10 +387,6 @@ export function ArtifactsView({
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
-    if (registrationBlockReason) {
-      setError(registrationBlockReason);
-      return;
-    }
     setError("");
     try {
       await window.opencrab.createArtifactJob({
@@ -505,10 +507,13 @@ export function ArtifactsView({
           const RecipeIcon = recipe.icon;
           return (
             <div key={recipe.id} role="listitem">
-              <button
+              <motion.button
                 aria-pressed={type === recipe.id}
                 className={type === recipe.id ? "recipe active" : "recipe"}
                 onClick={() => selectRecipe(recipe.id)}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.985 }}
+                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                 type="button"
               >
                 <div className="recipe-icon-row">
@@ -520,7 +525,7 @@ export function ArtifactsView({
                 <strong>{recipe.label}</strong>
                 {recommended ? <span className="badge badge-info">추천</span> : null}
                 <span>{recipe.review}</span>
-              </button>
+              </motion.button>
             </div>
           );
         })}
@@ -529,7 +534,15 @@ export function ArtifactsView({
       {error ? <ErrorBanner message={error} /> : null}
       {working ? <LoadingBlock label="산출물 작업을 처리하는 중" state="composing" /> : null}
 
+      <AnimatePresence initial={false}>
       {showCreate ? (
+        <motion.div
+          animate={{ height: "auto", opacity: 1, y: 0 }}
+          className="artifact-create-presence"
+          exit={{ height: 0, opacity: 0, y: -4 }}
+          initial={{ height: 0, opacity: 0, y: -4 }}
+          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+        >
         <Panel title="새 양식 작업">
           <form className="artifact-form" onSubmit={create}>
             <div className="artifact-selection-summary">
@@ -581,27 +594,15 @@ export function ArtifactsView({
               </label>
             </div>
 
-            {registrationBlockReason ? (
-              <div className="template-resolution wide not_found">
+            {draftWarning ? (
+              <div className="template-resolution wide suggested">
                 <AlertTriangle size={17} />
                 <div>
-                  <strong>산출물 등록 보류</strong>
-                  <span>{registrationBlockReason} 결정·인수인계에서 먼저 확정하세요.</span>
+                  <strong>초안 작업은 계속할 수 있습니다</strong>
+                  <span>{draftWarning}</span>
                   <button className="secondary-button template-confirm-button" onClick={onOpenDecisions} type="button">
-                    결정 대기 열기
+                    결정 확인
                   </button>
-                </div>
-              </div>
-            ) : null}
-            {hasNonBlockingCaseWarning ? (
-              <div className="template-resolution wide suggested">
-                <ShieldCheck size={17} />
-                <div>
-                  <strong>원본 사본 작업 가능</strong>
-                  <span>
-                    업무 건의 보류·결정 대기와 별개로 확인된 회사 원본의 사본을 등록할 수
-                    있습니다. 미확정 내용은 채우지 않고 검토 단계에서 확인합니다.
-                  </span>
                 </div>
               </div>
             ) : null}
@@ -698,12 +699,12 @@ export function ArtifactsView({
               <div>
                 <ShieldCheck size={17} />
                 <span>
-                  업무 단계와 결정 상태를 확인하고 회사 원본은 덮어쓰지 않은 채 사본으로 작업합니다.
+                  회사 원본은 덮어쓰지 않고 사본으로 작업하며, 미확정 값은 TBD로 유지합니다.
                 </span>
               </div>
               <button
                 className="primary-button"
-                disabled={templateResolving || !templatePath || Boolean(registrationBlockReason)}
+                disabled={templateResolving || !templatePath}
                 type="submit"
               >
                 작업 등록
@@ -711,13 +712,22 @@ export function ArtifactsView({
             </footer>
           </form>
         </Panel>
+        </motion.div>
       ) : null}
+      </AnimatePresence>
 
       <Panel title="생성·검토 현황">
         {state.artifactJobs.length ? (
           <div className="artifact-list">
-            {state.artifactJobs.map((job) => (
-              <div className="artifact-row" key={job.id}>
+            {state.artifactJobs.map((job, index) => (
+              <motion.div
+                animate={{ opacity: 1, y: 0 }}
+                className="artifact-row"
+                initial={{ opacity: 0, y: 5 }}
+                key={job.id}
+                layout="position"
+                transition={{ delay: Math.min(index, 4) * 0.035, duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              >
                 <div className="artifact-type">
                   <FileCheck2 size={18} />
                 </div>
@@ -729,6 +739,9 @@ export function ArtifactsView({
                   <p>{job.outputPath || job.templatePath}</p>
                   {job.validationDetail ? (
                     <span className="validation-detail">{job.validationDetail}</span>
+                  ) : null}
+                  {artifactApprovalBlockReason(state, job.caseId) ? (
+                    <span className="validation-detail warning">{artifactApprovalBlockReason(state, job.caseId)}</span>
                   ) : null}
                 </div>
                 <div className="artifact-status">
@@ -764,13 +777,14 @@ export function ArtifactsView({
                       className="secondary-button"
                       disabled={
                         working === job.id
+                        || Boolean(artifactApprovalBlockReason(state, job.caseId))
                         || Boolean(
                           recipes.find((item) => item.id === job.type)?.validationSpec
                           && job.validationState !== "passed",
                         )
                       }
                       onClick={() => void approve(job.id)}
-                      title="파일 내용을 직접 확인한 뒤 최종 검토를 완료합니다"
+                      title={artifactApprovalBlockReason(state, job.caseId) || "파일 내용을 직접 확인한 뒤 최종 검토를 완료합니다"}
                       type="button"
                     >
                       <ShieldCheck size={15} />
@@ -788,7 +802,7 @@ export function ArtifactsView({
                     </button>
                   ) : null}
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         ) : (

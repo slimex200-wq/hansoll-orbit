@@ -33,6 +33,7 @@ const application = await electron.launch({
   env: {
     ...process.env,
     OPENCRAB_E2E_MODE: "1",
+    OPENCRAB_E2E_MODEL_SELECT_DELAY_MS: "1200",
     OPENCRAB_DESKTOP_CONFIG_PATH: path.join(userDataDirectory, "no-microsoft-config.json"),
   },
 });
@@ -96,6 +97,7 @@ const auditReadability = async (screen) => ({
         const text = (directText || formText).replace(/\s+/g, " ").trim();
         if (
           !text ||
+          element.closest(":disabled, [aria-disabled='true']") ||
           style.display === "none" ||
           style.visibility === "hidden" ||
           Number(style.opacity) === 0 ||
@@ -128,6 +130,17 @@ const auditReadability = async (screen) => ({
 });
 
 const assertRecipeSelection = async (theme) => {
+  await window.waitForFunction(() => {
+    const grid = document.querySelector(".recipe-grid");
+    const active = grid?.querySelector(".recipe.active");
+    const inactive = grid?.querySelector(".recipe:not(.active)");
+    if (!(active instanceof HTMLElement) || !(inactive instanceof HTMLElement)) return false;
+    const activeStyle = getComputedStyle(active);
+    const inactiveStyle = getComputedStyle(inactive);
+    return activeStyle.backgroundColor !== inactiveStyle.backgroundColor
+      && activeStyle.borderColor !== inactiveStyle.borderColor;
+  });
+  await window.waitForTimeout(180);
   const selection = await window.locator(".recipe-grid").evaluate((grid) => {
     const active = grid.querySelector(".recipe.active");
     const inactive = grid.querySelector(".recipe:not(.active)");
@@ -257,7 +270,7 @@ const auditProductViews = async (theme) => {
     const item = navigationItems.nth(index);
     const label = (await item.innerText()).trim().replace(/\s+/g, "-");
     await item.click();
-    await window.waitForTimeout(120);
+    await window.waitForTimeout(280);
     if (label === "업무-건") {
       const createCaseButton = window.getByRole("button", { name: "새 업무 건", exact: true });
       if (await createCaseButton.isVisible()) {
@@ -284,7 +297,7 @@ const auditProductViews = async (theme) => {
         }
       }
     }
-    if (await window.locator(".recipe-grid").count()) {
+    if (await window.locator(".recipe-grid").isVisible().catch(() => false)) {
       await assertRecipeSelection(theme);
       if (theme === "dark") {
         await window.screenshot({
@@ -444,7 +457,7 @@ try {
     .waitFor();
   await window
     .getByTestId("desktop-titlebar")
-    .getByText("Work Intelligence", { exact: true })
+    .getByText("IT 검토용", { exact: true })
     .waitFor();
 
   const titlebarMetrics = await window.getByTestId("desktop-titlebar").evaluate((element) => ({
@@ -525,6 +538,25 @@ try {
   });
   if (await enabledAlternatives.count()) {
     await enabledAlternatives.first().click();
+    await agentPanel.getByText("모델 전환 중", { exact: true }).waitFor();
+    assert.equal(await modelSelect.getAttribute("aria-busy"), "true");
+    assert.equal(
+      await agentPanel.locator(".agent-model-trigger .spin").count(),
+      1,
+      "Model switching does not expose a visible progress indicator.",
+    );
+    const composerDuringModelSwitch = agentPanel.getByLabel("Work Agent 요청");
+    await composerDuringModelSwitch.fill("모델 전환 중 입력 유지 확인");
+    assert.equal(
+      await composerDuringModelSwitch.inputValue(),
+      "모델 전환 중 입력 유지 확인",
+      "The Agent composer becomes unresponsive while a model is switching.",
+    );
+    await composerDuringModelSwitch.fill("");
+    await window.screenshot({
+      path: path.join(outputDirectory, "02a-agent-model-switching.png"),
+      fullPage: true,
+    });
     await window.waitForFunction(async (initial) => {
       const status = await window.opencrab.getAgentStatus();
       return (
@@ -594,16 +626,11 @@ try {
   await window.waitForTimeout(100);
   await agentComposer.fill("271900010 최신 메일 확인");
   await window.getByRole("button", { name: "Work Agent 실행" }).click();
-  await agentPanel.getByText(/Outlook 동기화 중 · 1분 \d+초 경과/).waitFor();
-  const savedMailAnswerButton = agentPanel.getByRole("button", {
-    name: "저장된 자료로 지금 답변",
-  });
   assert.equal(
-    await savedMailAnswerButton.isEnabled(),
-    true,
-    "Saved-data answer remained disabled while Outlook was syncing.",
+    await agentPanel.locator(".agent-freshness-gate").count(),
+    0,
+    "A current-mail request was blocked instead of using the saved evidence snapshot.",
   );
-  await savedMailAnswerButton.click();
   await application.evaluate(({ BrowserWindow }, status) => {
     BrowserWindow.getAllWindows()[0].webContents.send("microsoft:status-changed", status);
   }, microsoftBeforeSyncTest);
@@ -620,12 +647,11 @@ try {
     "",
     "Agent composer was not cleared after submitting a request.",
   );
-  await window.getByText("최신 메일을 먼저 갱신해야 합니다", { exact: true }).waitFor();
-  await window.screenshot({
-    path: path.join(outputDirectory, "02-agent-mail-freshness-gate.png"),
-    fullPage: true,
-  });
-  await window.getByRole("button", { name: "저장된 자료로 지금 답변" }).click();
+  assert.equal(
+    await agentPanel.locator(".agent-freshness-gate").count(),
+    0,
+    "Saved local evidence should answer immediately without an extra confirmation click.",
+  );
   await window
     .locator('canvas[aria-label="근거를 확인하고 실행안을 정리하는 중 애니메이션"]')
     .waitFor();
@@ -852,7 +878,80 @@ try {
     path: path.join(outputDirectory, "04a-task-medium-1252.png"),
     fullPage: true,
   });
+  await setWindowContentSize(1478, 938);
+  const originalAgentWidth = await window.evaluate(() => {
+    const workspace = document.querySelector(".workspace");
+    if (!(workspace instanceof HTMLElement)) return "";
+    const current = workspace.style.getPropertyValue("--agent-width");
+    workspace.style.setProperty("--agent-width", "444px");
+    return current;
+  });
+  await window.waitForTimeout(180);
+  const wideAgentPlannerLayout = await window.evaluate(() => {
+    const planner = document.querySelector(".planner-view");
+    const layout = document.querySelector(".planner-list-layout");
+    const taskPanel = document.querySelector(".planner-task-panel");
+    const milestonePanel = document.querySelector(".planner-milestone-panel");
+    const filter = document.querySelector(".planner-filter-row");
+    const statusControls = [...document.querySelectorAll(".planner-task-panel select")];
+    const taskBounds = taskPanel?.getBoundingClientRect();
+    const milestoneBounds = milestonePanel?.getBoundingClientRect();
+    return {
+      plannerClientWidth: planner?.clientWidth ?? 0,
+      plannerScrollWidth: planner?.scrollWidth ?? 0,
+      layoutClientWidth: layout?.clientWidth ?? 0,
+      layoutScrollWidth: layout?.scrollWidth ?? 0,
+      filterClientWidth: filter?.clientWidth ?? 0,
+      filterScrollWidth: filter?.scrollWidth ?? 0,
+      panelsStacked: Boolean(
+        taskBounds && milestoneBounds && milestoneBounds.top >= taskBounds.bottom - 1,
+      ),
+      statusControlsInsidePanel: statusControls.every(
+        (control) => control.getBoundingClientRect().right <= (taskBounds?.right ?? 0),
+      ),
+      scrollbarWidth: getComputedStyle(
+        document.querySelector(".content"),
+        "::-webkit-scrollbar",
+      ).width,
+      scrollbarButtonDisplay: getComputedStyle(
+        document.querySelector(".content"),
+        "::-webkit-scrollbar-button",
+      ).display,
+    };
+  });
+  assert.ok(
+    wideAgentPlannerLayout.plannerScrollWidth <= wideAgentPlannerLayout.plannerClientWidth &&
+      wideAgentPlannerLayout.layoutScrollWidth <= wideAgentPlannerLayout.layoutClientWidth,
+    `Wide Agent causes horizontal planner overflow: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.ok(
+    wideAgentPlannerLayout.filterScrollWidth <= wideAgentPlannerLayout.filterClientWidth,
+    `Planner filters still create an inline scrollbar: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(
+    wideAgentPlannerLayout.panelsStacked,
+    true,
+    `Planner panels do not respond to the remaining workspace width: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(
+    wideAgentPlannerLayout.statusControlsInsidePanel,
+    true,
+    `Wide Agent clips planner status controls: ${JSON.stringify(wideAgentPlannerLayout)}`,
+  );
+  assert.equal(wideAgentPlannerLayout.scrollbarWidth, "10px");
+  assert.equal(wideAgentPlannerLayout.scrollbarButtonDisplay, "none");
+  await window.screenshot({
+    path: path.join(outputDirectory, "04a2-planner-wide-agent-responsive.png"),
+    fullPage: true,
+  });
+  await window.evaluate((width) => {
+    const workspace = document.querySelector(".workspace");
+    if (!(workspace instanceof HTMLElement)) return;
+    if (width) workspace.style.setProperty("--agent-width", width);
+    else workspace.style.removeProperty("--agent-width");
+  }, originalAgentWidth);
   await setWindowContentSize(1440, 900);
+  await window.waitForTimeout(120);
   await window.screenshot({
     path: path.join(outputDirectory, "04-task-followup.png"),
     fullPage: true,
@@ -877,8 +976,16 @@ try {
     .filter({ hasText: movingTaskTitle });
   await filteredMovingTask.waitFor();
   await filteredMovingTask.locator("select").selectOption(destinationTaskStatus);
-  await filteredMovingTask.waitFor({ state: "hidden" });
-  await taskFilterTabs.nth(taskStatusTabIndex[destinationTaskStatus]).click();
+  await taskFilterTabs
+    .nth(taskStatusTabIndex[destinationTaskStatus])
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await taskFilterTabs
+      .nth(taskStatusTabIndex[destinationTaskStatus])
+      .getAttribute("aria-pressed"),
+    "true",
+    "Planner did not follow the task into its destination status filter.",
+  );
   const movedTask = window
     .locator(".planner-task-panel .planner-list-item")
     .filter({ hasText: movingTaskTitle });
@@ -964,11 +1071,17 @@ try {
   await assertRecipeSelection("light");
   const templateInput = window.getByLabel("자동 연결된 회사 원본");
   await templateInput.waitFor();
-  await window.getByText("산출물 등록 보류", { exact: true }).waitFor();
+  await window.getByText("회사 원본 자동 탐색 중", { exact: true }).waitFor({ state: "hidden" });
+  const confirmBlockedDraftTemplate = window.getByRole("button", { name: "이 추천 원본 사용" });
+  if (await confirmBlockedDraftTemplate.count()) await confirmBlockedDraftTemplate.click();
+  await window.waitForFunction(
+    () => Boolean(document.querySelector('input[aria-label="자동 연결된 회사 원본"]')?.value),
+  );
+  await window.getByText("초안 작업은 계속할 수 있습니다", { exact: true }).waitFor();
   assert.equal(
     await window.getByRole("button", { name: "작업 등록" }).isDisabled(),
-    true,
-    "Blocked Agent case allowed an artifact job before decisions were resolved.",
+    false,
+    "A pending decision blocked a source-backed artifact draft.",
   );
   await selectArtifactRecipe("Costing Sheet");
   await window.waitForFunction(
@@ -979,15 +1092,11 @@ try {
       return input?.value.includes("COSTING") && input.value.includes("271900010");
     },
   );
-  assert.equal(
-    await window.getByText("산출물 등록 보류", { exact: true }).count(),
-    1,
-    "A blocked case bypassed the decision gate through a costing artifact.",
-  );
+  await window.getByText("초안 작업은 계속할 수 있습니다", { exact: true }).waitFor();
   assert.equal(
     await window.getByRole("button", { name: "작업 등록" }).isDisabled(),
-    true,
-    "A blocked case enabled costing artifact registration.",
+    false,
+    "A pending decision blocked a costing draft with a resolved company source.",
   );
   const costingTemplatePath = await templateInput.inputValue();
   await window.screenshot({
@@ -1011,16 +1120,14 @@ try {
   let pendingDecisionCount = await pendingDecisionRows.count();
   while (pendingDecisionCount > 0) {
     await pendingDecisionRows.first().getByRole("button", { name: "결정 기록" }).click();
-    await window.getByLabel("결정", { exact: true }).fill("E2E verification decision");
+    await window.getByLabel("결론", { exact: true }).fill("E2E verification decision");
+    await window.getByText("근거·인수인계 추가", { exact: false }).click();
     await window.getByLabel("판단 근거").fill("Workflow gate verification");
     await window.getByPlaceholder("근거 위치").fill("desktop e2e");
     await window.getByLabel("채택한 근거").fill("E2E workflow evidence");
     await window.getByLabel("영향·인수인계").fill("Release the reviewed workflow gate");
-    const releaseCase = window.getByLabel("마지막 결정 대기가 해소되면 업무 건을 검토 상태로 전환");
-    assert.equal(await releaseCase.isChecked(), false, "Decision release was enabled by default.");
-    await releaseCase.check();
-    await window.getByText(/업무 건의 보류 상태도 함께 해제됩니다/).waitFor();
-    await window.getByRole("button", { name: "기록 저장", exact: true }).click();
+    await window.getByText("결론만 입력하면 이 대기 항목이 해소됩니다.", { exact: true }).waitFor();
+    await window.getByRole("button", { name: "결론 저장하고 대기 해소", exact: true }).click();
     await window.waitForFunction(
       ({ title, previousCount }) =>
         [...document.querySelectorAll(".pending-decision-row")]
@@ -1084,7 +1191,8 @@ try {
   await window.getByRole("heading", { name: "결정·인수인계" }).waitFor();
   await window.getByRole("button", { name: "결정 기록", exact: true }).first().click();
   await window.getByPlaceholder("판단이 필요했던 항목").fill("Current submit stage");
-  await window.getByLabel("결정", { exact: true }).fill("Review latest mail before selecting stage.");
+  await window.getByLabel("결론", { exact: true }).fill("Review latest mail before selecting stage.");
+  await window.getByText("근거·인수인계 추가", { exact: false }).click();
   await window.getByLabel("판단 근거").fill("Work Agent evidence summary");
   await window.getByLabel("채택한 근거").fill("Latest Work Agent evidence summary");
   await window.getByLabel("영향·인수인계").fill("Submit stage owner reviews the latest mail before execution");
@@ -1269,6 +1377,7 @@ try {
     path: path.join(outputDirectory, "23-settings-agent-providers.png"),
     fullPage: true,
   });
+  await setWindowContentSize(1440, 760);
   await settingsNavigation
     .getByRole("button", { name: "진단 및 동기화", exact: true })
     .click();
@@ -1284,10 +1393,176 @@ try {
     (await diagnosticsContent.locator(".admin-row").count()) >= 5,
     "Diagnostics no longer exposes enough user-relevant health checks.",
   );
+  const remediation = diagnosticsContent.locator(".settings-remediation");
+  if ((await remediation.count()) === 0) {
+    await diagnosticsContent.locator(".settings-page").evaluate((page) => {
+      const section = document.createElement("section");
+      section.className = "settings-remediation";
+      section.setAttribute("aria-labelledby", "settings-remediation-title-e2e");
+      section.innerHTML = `
+        <div class="settings-remediation-heading">
+          <h3 id="settings-remediation-title-e2e">조치 필요</h3>
+        </div>
+        <ol class="action-list settings-action-list">
+          <li>읽지 못한 Style 원본을 확인한 뒤 검색 자료를 다시 갱신하세요.</li>
+          <li>신형 Outlook 현재 메일 기준 업무에는 회사 Microsoft 365 연결이 필요합니다.</li>
+        </ol>
+        <div class="settings-remediation-actions">
+          <button class="secondary-button" type="button">상태 다시 확인</button>
+        </div>`;
+      const sourceIcon = page.querySelector(".admin-row svg.warning-text");
+      const heading = section.querySelector(".settings-remediation-heading");
+      if (sourceIcon && heading) heading.prepend(sourceIcon.cloneNode(true));
+      page.append(section);
+    });
+  }
+  await remediation.waitFor({ state: "visible" });
+  assert.equal(
+    await remediation.locator(".settings-group").count(),
+    0,
+    "Diagnostics remediation is nested inside another settings card.",
+  );
+  const remediationLayout = await remediation.evaluate((element) => {
+    const actions = element.querySelector(".settings-remediation-actions");
+    const lastButton = actions?.querySelector("button:last-child");
+    if (!(actions instanceof HTMLElement) || !(lastButton instanceof HTMLElement)) return null;
+    const panelRect = element.getBoundingClientRect();
+    const actionsRect = actions.getBoundingClientRect();
+    const buttonRect = lastButton.getBoundingClientRect();
+    return {
+      actionInset: actionsRect.left - panelRect.left,
+      buttonBottomInset: panelRect.bottom - buttonRect.bottom,
+      buttonTopInset: buttonRect.top - actionsRect.top,
+    };
+  });
+  assert.ok(
+    remediationLayout &&
+      remediationLayout.actionInset >= 15 &&
+      remediationLayout.buttonBottomInset >= 14 &&
+      remediationLayout.buttonTopInset >= 11,
+    `Diagnostics remediation controls are attached to the panel edge: ${JSON.stringify(remediationLayout)}`,
+  );
+  await remediation.screenshot({
+    path: path.join(outputDirectory, "08b-settings-remediation.png"),
+  });
+  await diagnosticsContent.locator(".settings-page").evaluate((element) => {
+    element.style.paddingBottom = "360px";
+    element.closest(".settings-content")?.dispatchEvent(new Event("scroll"));
+  });
+  const diagnosticsScrollBefore = await diagnosticsContent.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+    frameHeight: element.parentElement?.clientHeight ?? 0,
+    mainHeight: element.parentElement?.parentElement?.clientHeight ?? 0,
+    layoutHeight: element.closest(".settings-layout")?.clientHeight ?? 0,
+    hostHeight: element.closest(".settings-content-host")?.clientHeight ?? 0,
+  }));
+  assert.ok(
+    diagnosticsScrollBefore.scrollHeight > diagnosticsScrollBefore.clientHeight,
+    `Diagnostics fixture no longer exercises overflow: ${JSON.stringify(diagnosticsScrollBefore)}`,
+  );
+  const settingsScrollRail = window.locator(".settings-scroll-rail");
+  await settingsScrollRail.waitFor({ state: "visible" });
+  const settingsScrollTicks = settingsScrollRail.locator(".settings-scroll-tick");
+  assert.equal(
+    await settingsScrollTicks.count(),
+    23,
+    "Settings scroll rail does not expose the expected navigation range.",
+  );
+  await settingsScrollTicks.nth(11).hover();
+  await window.waitForTimeout(220);
+  const railMarkerWidths = await settingsScrollTicks.evaluateAll((ticks) =>
+    ticks.map((tick) => {
+      const marker = tick.querySelector("span");
+      return marker ? marker.getBoundingClientRect().width : 0;
+    }),
+  );
+  assert.ok(
+    railMarkerWidths[11] > railMarkerWidths[10] &&
+      railMarkerWidths[10] > railMarkerWidths[9] &&
+      railMarkerWidths[9] > railMarkerWidths[0],
+    `Settings scroll rail does not expand progressively on hover: ${JSON.stringify(railMarkerWidths)}`,
+  );
+  await window.screenshot({
+    path: path.join(outputDirectory, "08a-settings-scroll-rail-hover.png"),
+    fullPage: true,
+  });
+  await settingsScrollTicks.last().click();
+  await window.waitForFunction(() => {
+    const element = document.querySelector(".settings-content");
+    if (!(element instanceof HTMLElement)) return false;
+    const range = element.scrollHeight - element.clientHeight;
+    return range > 0 && element.scrollTop >= range - 2;
+  });
+  await diagnosticsContent.evaluate((element) => element.scrollTo({ top: 0, behavior: "auto" }));
+  await diagnosticsContent.hover();
+  await window.mouse.wheel(0, 640);
+  await window.waitForFunction(() => {
+    const element = document.querySelector(".settings-content");
+    return element instanceof HTMLElement && element.scrollTop > 0;
+  });
+  assert.ok(
+    await diagnosticsContent.evaluate((element) => element.scrollTop > 0),
+    "Diagnostics content does not scroll with the mouse wheel.",
+  );
   await window.screenshot({
     path: path.join(outputDirectory, "08-settings-diagnostics.png"),
     fullPage: true,
   });
+  await diagnosticsContent.locator(".settings-page").evaluate((element) => {
+    element.style.paddingBottom = "";
+  });
+
+  await setWindowContentSize(1440, 900);
+  const settingsHeaderPositions = {};
+  const settingsAccountPositions = {};
+  for (const label of [
+    "계정",
+    "부서 및 바이어",
+    "화면 및 언어",
+    "앱 연결",
+    "Work Agent",
+    "템플릿",
+    "진단 및 동기화",
+    "데이터 및 권한",
+  ]) {
+    await settingsNavigation.getByRole("button", { name: label, exact: true }).click();
+    await window.getByRole("heading", { name: label, exact: true }).waitFor();
+    await window.waitForTimeout(220);
+    settingsHeaderPositions[label] = await window
+      .locator(".settings-page-header")
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
+    settingsAccountPositions[label] = await window
+      .locator(".settings-account-footer")
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
+  }
+  const settingsHeaderLefts = Object.values(settingsHeaderPositions).map((item) => item.left);
+  const settingsHeaderTops = Object.values(settingsHeaderPositions).map((item) => item.top);
+  assert.ok(
+    Math.max(...settingsHeaderLefts) - Math.min(...settingsHeaderLefts) <= 1,
+    `Settings page headers shift horizontally between tabs: ${JSON.stringify(settingsHeaderPositions)}`,
+  );
+  assert.ok(
+    Math.max(...settingsHeaderTops) - Math.min(...settingsHeaderTops) <= 1,
+    `Settings page headers shift vertically between tabs: ${JSON.stringify(settingsHeaderPositions)}`,
+  );
+  const settingsAccountLefts = Object.values(settingsAccountPositions).map((position) => position.left);
+  const settingsAccountTops = Object.values(settingsAccountPositions).map((position) => position.top);
+  assert.ok(
+    Math.max(...settingsAccountLefts) - Math.min(...settingsAccountLefts) <= 1,
+    `Settings account footer shifts horizontally between tabs: ${JSON.stringify(settingsAccountPositions)}`,
+  );
+  assert.ok(
+    Math.max(...settingsAccountTops) - Math.min(...settingsAccountTops) <= 1,
+    `Settings account footer shifts vertically between tabs: ${JSON.stringify(settingsAccountPositions)}`,
+  );
 
   const appearanceSettingsButton = settingsNavigation.getByRole("button", {
     name: "화면 및 언어",

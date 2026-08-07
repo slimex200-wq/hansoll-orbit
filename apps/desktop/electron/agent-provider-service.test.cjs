@@ -92,6 +92,31 @@ test("selects and persists a chat model", async () => {
   await assert.rejects(() => service.select("codex", "unsupported"), /지원하지 않는 AI 모델/);
 });
 
+test("model selection reuses warm provider health instead of rerunning CLI checks", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-provider-"));
+  const calls = [];
+  const service = createAgentProviderService({
+    configPath: path.join(root, "agent-provider.json"),
+    bridge: {
+      agentStatus: async (provider, model) => {
+        calls.push({ provider, model });
+        return status(provider, true);
+      },
+    },
+    openExternal: async () => {},
+  });
+
+  await service.getStatus();
+  assert.deepEqual(calls.map((item) => item.provider).sort(), ["claude", "codex"]);
+
+  calls.length = 0;
+  const selected = await service.select("codex", "gpt-5.6-sol");
+
+  assert.deepEqual(calls, []);
+  assert.equal(selected.model, "gpt-5.6-sol");
+  assert.equal(selected.providers.length, 2);
+});
+
 test("opens official installation help when a provider cli is missing", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-provider-"));
   const opened = [];

@@ -1,34 +1,56 @@
-# Main Dashboard Design QA
+# ORBIT diagnostics remediation design QA
 
-- Reference: `.omx/artifacts/visual-ralph/codex-settings/reference-settings.png`
-- Surface: Electron main dashboard with persistent product rail and optional Work Agent sidebar
-- Viewports: 1440x900 and 1024x768
-- Themes: Light, Dark, Dracula
+## Comparison target
 
-## Captures
+- Source visual truth: `C:\Users\shjung1\AppData\Local\Temp\codex-clipboard-c25af056-6599-4808-85dd-b454395c11a4.png`
+- Implementation screenshot: `outputs/desktop-e2e/08b-settings-remediation.png`
+- Combined comparison input: `outputs/desktop-e2e/08c-settings-remediation-comparison.png`
+- Source pixels: 745 x 183
+- Implementation pixels: 738 x 175
+- Density normalization: none; both artifacts are compared at 1:1 pixels
+- State: light theme, diagnostics view, two remediation items, one secondary action
 
-- Light with Agent: `outputs/desktop-e2e/03-agent-result.png`
-- Light final: `outputs/desktop-e2e/22-dashboard-light-final.png`
-- Dark desktop: `outputs/desktop-e2e/20-dashboard-dark.png`
-- Dracula desktop: `outputs/desktop-e2e/21-dashboard-dracula.png`
-- Dark compact: `outputs/desktop-e2e/18-dashboard-dark-1024.png`
-- Dracula compact: `outputs/desktop-e2e/19-dashboard-dracula-1024.png`
-- AI providers desktop: `outputs/desktop-e2e/23-settings-agent-providers.png`
-- AI providers compact: `outputs/desktop-e2e/24-settings-agent-providers-1024.png`
+## Full-view comparison evidence
+
+The combined input was opened at original detail. The source separates the heading from a bordered settings card, then places the action button against that card's bottom border. The implementation presents the same content as one flat warning surface with a single amber accent, keeping the heading, instructions, divider, and action inside one intentional component.
+
+## Focused-region comparison evidence
+
+The supplied source is already a focused crop, so no second crop was needed. The after image confirms that the outer card border is gone, the button clears every panel edge, and the action row is separated from the instructions by both whitespace and a subtle divider.
+
+## Required fidelity surfaces
+
+- Fonts and typography: Segoe UI/Malgun Gothic, existing 12 px heading, and operational copy styles are preserved.
+- Spacing and layout rhythm: 14–16 px panel insets, a 10 px heading gap, and 12–13 px action separation remove the former border collision.
+- Colors and visual tokens: existing `--amber`, `--amber-soft`, and surface tokens create the warning treatment in every theme; no new palette was introduced.
+- Image quality and asset fidelity: the production UI uses the existing Lucide `AlertTriangle`; no custom artwork was added.
+- Copy and content: all production Korean copy and actions are unchanged.
+
+## Interaction verification
+
+- The remediation section is a semantic labelled `section`, not a nested `SettingsGroup`.
+- E2E geometry requires at least 15 px horizontal action inset, 14 px bottom button inset, and 11 px separation above the button.
+- Refresh and conditional remediation actions retain their existing handlers and disabled states.
+- Disabled controls are excluded from the contrast audit, matching WCAG's inactive-component exception.
 
 ## Findings
 
-- P0: none
-- P1: none
-- P2: none
-- P3: the dashboard intentionally uses a denser row rhythm than Settings because it is an operational queue
+- P0: none.
+- P1: none.
+- P2: none.
+- P3: none.
 
-The old floating metric cards and colored top rules are removed. Counts now share one grouped strip, priority work is the dominant scan path, environment warnings are secondary, and raw diagnostic keys are replaced with Korean work-language labels. All visible controls remain functional and no text overlap or horizontal body overflow was observed.
+## Comparison history
 
-The default Electron title bar and File/Edit/View/Window menu are replaced by one 48px app-owned command header. Product identity, search, Agent status, and warning count now share that row while the native caption-control reserve remains clear. Automated checks lock the hidden menu, viewport fit, title-bar height, and native window capabilities.
+1. Source: a general settings card was reused for action guidance, creating a card-within-section appearance and pinning the button to the lower border.
+2. Fix: the nested card was replaced with a dedicated flat remediation section and a separated action row.
+3. Post-fix: the 1:1 combined comparison and automated geometry checks found no remaining P0/P1/P2/P3 issue.
 
-The Work Agent settings expose official ChatGPT/Codex and Claude Pro/Max login management without storing credentials in ORBIT. Both provider rows, selection actions, recovery access, and the policy note fit without horizontal overflow at 1440x900 and 1024x768.
+## Verification
 
-Visual verdict: 97/100
+- TypeScript + Vite production build: passed.
+- Unit/integration tests: 141/141 passed.
+- Desktop E2E: passed, including remediation nesting/spacing geometry, 7 workspaces, 3 themes, and 1024 x 768 compact coverage.
+- `git diff --check`: passed.
 
-final result: passed
+Final result: passed

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { MotionConfig } from "motion/react";
 import { Shell } from "./components/Shell";
+import { ViewTransition } from "./components/Motion";
 import { ErrorBanner, LoadingBlock } from "./components/UI";
 import { AdminView } from "./views/AdminView";
 import { AgentView } from "./views/AgentView";
@@ -34,10 +36,32 @@ function mergeMicrosoftAudit(
   audit: AuditResult,
   microsoft: MicrosoftStatus | null,
 ): AuditResult {
-  const items = audit.items.filter((item) => item.name !== "microsoft_mail");
-  const nextActions = audit.next_actions.filter(
+  let items = audit.items.filter((item) => item.name !== "microsoft_mail");
+  let nextActions = audit.next_actions.filter(
     (item) => !item.startsWith("Microsoft 365:"),
   );
+  const lastSyncAt = microsoft?.lastSyncAt ? Date.parse(microsoft.lastSyncAt) : Number.NaN;
+  const currentMailIsFresh = Boolean(
+    microsoft?.state === "connected"
+      && ["ready", "ready_with_warnings"].includes(microsoft.syncState)
+      && Number.isFinite(lastSyncAt)
+      && Date.now() - lastSyncAt <= 72 * 60 * 60 * 1_000,
+  );
+  if (currentMailIsFresh) {
+    const totalMessages = microsoft?.lastSyncResult?.totalMessages ?? 0;
+    const sourceLabel = microsoft?.sourceCoverage === "local_cache_only"
+      ? "Classic Outlook 로컬 캐시"
+      : "Microsoft 365 원본 메일";
+    items = items.filter((item) => item.name !== "mail_freshness");
+    items.push({
+      name: "mail_freshness",
+      status: "pass",
+      detail: `${sourceLabel} ${totalMessages.toLocaleString("ko-KR")}건을 최신 상태로 검색할 수 있습니다.`,
+    });
+    nextActions = nextActions.filter(
+      (item) => !/refresh exported mail|direct mail ingest|메일.*(?:갱신|연결)/i.test(item),
+    );
+  }
   if (microsoft?.error && !microsoft.configured) {
     items.push({
       name: "microsoft_mail",
@@ -90,6 +114,14 @@ function mergeMicrosoftAudit(
     const failedMailboxes = microsoft.lastSyncResult?.mailboxes.filter(
       (mailbox) => !mailbox.ok,
     ) ?? [];
+    if (localCacheOnly && currentMailIsFresh) {
+      return {
+        ...audit,
+        ready_for_mail_dependent_work: true,
+        items,
+        next_actions: nextActions,
+      };
+    }
     items.push({
       name: "microsoft_mail",
       status: "warn",
@@ -101,7 +133,7 @@ function mergeMicrosoftAudit(
     });
     nextActions.push(
       localCacheOnly
-        ? "Microsoft 365: 신형 Outlook 전체 메일 기준 업무에는 회사 Microsoft 365 연결이 필요합니다."
+        ? "Outlook: 로컬 메일 동기화를 다시 실행하세요."
         : failedMailboxes.length
           ? "Microsoft 365: 실패한 공유 메일함 권한과 연결 상태를 확인하세요."
           : "Outlook: 메일 가져오기가 완료된 뒤 상태를 다시 확인하세요.",
@@ -130,7 +162,14 @@ function mergeMicrosoftAudit(
     };
   }
 
-  return { ...audit, items, next_actions: nextActions };
+  return {
+    ...audit,
+    ready_for_mail_dependent_work: currentMailIsFresh
+      ? true
+      : audit.ready_for_mail_dependent_work,
+    items,
+    next_actions: nextActions,
+  };
 }
 
 function initialTheme(): ThemeMode {
@@ -182,10 +221,13 @@ export default function App() {
     const applyStatus = (status: BusinessIndexStatus) => {
       if (!active) return;
       setBusinessIndexStatus(status);
-      if (status.audit) {
-        void window.opencrab.getMicrosoftStatus().then((nextMicrosoft) => {
-          if (active) setAudit(mergeMicrosoftAudit(status.audit!, nextMicrosoft));
-        });
+      if (status.state === "complete") {
+        void Promise.all([
+          window.opencrab.audit(),
+          window.opencrab.getMicrosoftStatus(),
+        ]).then(([nextAudit, nextMicrosoft]) => {
+          if (active) setAudit(mergeMicrosoftAudit(nextAudit, nextMicrosoft));
+        }).catch(() => {});
       }
     };
     const unsubscribe = window.opencrab.onBusinessIndexStatus(applyStatus);
@@ -382,7 +424,8 @@ export default function App() {
   };
 
   return (
-    <Shell
+    <MotionConfig reducedMotion="user">
+      <Shell
       agent={
         <AgentView
           agentStatus={agentStatus}
@@ -404,8 +447,9 @@ export default function App() {
       onGlobalSearch={globalSearch}
       onNavigate={navigate}
       view={view}
-    >
-      {content()}
-    </Shell>
+      >
+        <ViewTransition viewKey={view}>{content()}</ViewTransition>
+      </Shell>
+    </MotionConfig>
   );
 }

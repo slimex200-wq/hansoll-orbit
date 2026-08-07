@@ -128,6 +128,36 @@ dependencies = [
         detail = smoke.check_packaged_private_data(package)
         self.assertIn("1 app archive", detail)
 
+    def test_synthetic_fixture_scan_rejects_private_identifiers(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        fixture = root / "examples" / "sample.json"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            '{"path":"C:\\\\Users\\\\employee\\\\OneDrive - Company",'
+            '"email":"person@hansoll.com"}',
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic fixtures"):
+            smoke.check_synthetic_fixture_privacy(root)
+
+    def test_synthetic_fixture_scan_accepts_demo_only_data(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        fixture = root / "examples" / "sample.json"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            '{"style":"DEMO-STYLE-001","email":"reviewer@example.com"}',
+            encoding="utf-8",
+        )
+
+        detail = smoke.check_synthetic_fixture_privacy(root)
+
+        self.assertIn("1 synthetic fixture", detail)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,16 @@ const desktopRoot = path.resolve(scriptDirectory, "..");
 const repoRoot = path.resolve(desktopRoot, "../..");
 const outputDirectory = path.join(repoRoot, "outputs", "desktop-e2e-empty-state");
 const userDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-empty-e2e-"));
+const sourceRoot = path.join(userDataDirectory, "source");
+const solidSubmitTemplate = path.join(
+  sourceRoot,
+  "Talbots",
+  "Submit form",
+  "SOLID SUBMIT FORM.xlsx",
+);
 fs.mkdirSync(outputDirectory, { recursive: true });
+fs.mkdirSync(path.dirname(solidSubmitTemplate), { recursive: true });
+fs.writeFileSync(solidSubmitTemplate, "ORBIT E2E template fixture");
 
 const packagedExecutable = process.env.ORBIT_E2E_EXECUTABLE || "";
 const application = await electron.launch({
@@ -23,6 +32,7 @@ const application = await electron.launch({
     ...process.env,
     OPENCRAB_E2E_MODE: "1",
     OPENCRAB_E2E_EMPTY_STATE: "1",
+    OPENCRAB_SOURCE_ROOT: sourceRoot,
     OPENCRAB_DESKTOP_CONFIG_PATH: path.join(userDataDirectory, "no-microsoft-config.json"),
   },
 });
@@ -64,7 +74,13 @@ try {
   await window.getByRole("heading", { name: "업무 현황" }).waitFor({ timeout: 120_000 });
   // Synthetic data must never be indistinguishable from real work. Any mode
   // that seeds fixtures has to declare itself in the badge and window title.
-  await window.getByText("IT 검토용", { exact: true }).waitFor({ timeout: 30_000 });
+  // Compact Windows runners intentionally hide the secondary title-bar label,
+  // so verify the synthetic-data marker is mounted instead of requiring it to
+  // remain visually exposed at every responsive width.
+  await window
+    .getByTestId("desktop-titlebar")
+    .getByText("IT 검토용", { exact: true })
+    .waitFor({ state: "attached", timeout: 30_000 });
   assert.equal(
     await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getTitle(),
@@ -100,10 +116,15 @@ try {
   await application.evaluate(({ BrowserWindow }) => {
     const target = BrowserWindow.getAllWindows()[0];
     target.unmaximize();
-    target.setContentSize(1024, 768);
+    // Stay below the responsive breakpoint without requesting the runner's
+    // entire work area; Windows constrains a 1024x768 content window when the
+    // taskbar or display scaling reduces the available desktop height.
+    target.setContentSize(1024, 720);
     target.center();
   });
-  await window.waitForFunction(() => window.innerWidth === 1024 && window.innerHeight === 768);
+  await window.waitForFunction(
+    () => window.innerWidth === 1024 && window.innerHeight >= 640 && window.innerHeight <= 720,
+  );
   for (const theme of ["dark", "dracula"]) {
     const readability = await inspectSuggestionReadability(theme);
     assert.ok(readability, `${theme} Agent suggestions were not rendered.`);
@@ -128,7 +149,7 @@ try {
   assert.deepEqual(
     await window.evaluate(() => window.opencrab.getState()),
     {
-      schemaVersion: 5,
+      schemaVersion: 6,
       cases: [],
       tasks: [],
       milestones: [],
@@ -182,7 +203,8 @@ try {
   await window.getByLabel("업무 건", { exact: true }).selectOption("");
   await window.getByLabel("새 업무 건 이름").fill("271900030 Submit 인수인계");
   await window.getByPlaceholder("판단이 필요했던 항목").fill("다음 Submit 담당자");
-  await window.getByLabel("결정", { exact: true }).fill("Development 담당자가 다음 Submit을 진행합니다.");
+  await window.getByLabel("결론", { exact: true }).fill("Development 담당자가 다음 Submit을 진행합니다.");
+  await window.getByText("근거·인수인계 추가", { exact: false }).click();
   await window.getByLabel("채택한 근거").fill("최신 메일의 담당자 지정");
   await window.getByLabel("영향·인수인계").fill("Development 담당자가 다음 Submit 일정과 산출물을 이어서 처리");
   await window.getByRole("button", { name: "기록 저장", exact: true }).click();

@@ -16,17 +16,22 @@
     "test": "node --test electron/*.test.cjs scripts/*.test.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "test:e2e:empty": "node scripts/e2e-empty-state.mjs",
+    "test:e2e:recovery": "node scripts/e2e-local-recovery.mjs",
+    "test:e2e:packaged": "node scripts/e2e-packaged-smoke.mjs",
     "test:it-review": "node scripts/it-review-smoke.mjs",
     "build:wam": "node scripts/build-wam-helper.mjs",
     "build:backend": "node scripts/build-backend-helper.mjs",
     "package:prod": "npm run build && npm run build:wam && npm run build:backend && electron-builder --config electron-builder.production.cjs --win nsis --x64 --publish never && node scripts/verify-production-release.mjs",
     "package:prod:dir": "npm run build && npm run build:wam && npm run build:backend && electron-builder --config electron-builder.production.cjs --dir --win --x64 --publish never",
+    "release:manifest:create": "node scripts/release-manifest.mjs create",
+    "release:manifest:verify": "node scripts/release-manifest.mjs verify",
     "package:it": "npm run build && npm run build:wam && electron-builder --win portable --x64 --publish never",
     "package:it:dir": "npm run build && npm run build:wam && electron-builder --dir --win --x64 --publish never"
   },
   "dependencies": {
     "@azure/msal-node": "5.4.2",
     "lucide-react": "1.26.0",
+    "motion": "^13.0.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "thinking-orbs": "^0.1.1"

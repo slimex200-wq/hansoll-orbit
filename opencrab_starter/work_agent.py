@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC, datetime, timedelta, timezone
@@ -108,6 +109,16 @@ def answer_query(
         from .agent_synthesis import apply_missing_target_guardrail
 
         answer = apply_missing_target_guardrail(answer)
+    response_mode = str(answer.get("response_mode") or _response_mode(query))
+    if _current_style_work_has_no_evidence(judgment, app_context):
+        answer = _apply_current_work_no_evidence_guardrail(
+            answer,
+            judgment,
+            response_mode=response_mode,
+        )
+        synthesis["guardrails"] = (
+            f"{synthesis.get('guardrails') or ''},current_work_zero_evidence"
+        ).strip(",")
     mail_scope = (judgment.get("classification") or {}).get("mail_scope") or {}
     scoped_mail_hits = int(
         ((judgment.get("evidence_summary") or {}).get("mail_index") or {}).get(
@@ -122,10 +133,15 @@ def answer_query(
                 answer,
                 mail_scope,
                 mail_context,
+                response_mode=response_mode,
             )
             guardrail = "scoped_mail_source_unverified"
         else:
-            answer = _apply_scoped_mail_no_hits_guardrail(answer, mail_scope)
+            answer = _apply_scoped_mail_no_hits_guardrail(
+                answer,
+                mail_scope,
+                response_mode=response_mode,
+            )
             guardrail = "scoped_mail_zero_hits"
         synthesis["guardrails"] = (
             f"{synthesis.get('guardrails') or ''},{guardrail}"
@@ -138,10 +154,93 @@ def answer_query(
     }
 
 
+def _current_style_work_has_no_evidence(
+    judgment: dict[str, Any],
+    app_context: dict[str, Any] | None,
+) -> bool:
+    classification = judgment.get("classification") or {}
+    styles = [str(item).strip() for item in classification.get("styles") or [] if str(item).strip()]
+    if not classification.get("current_work_query") or not styles:
+        return False
+
+    evidence = judgment.get("evidence_summary") or {}
+    indexed_hits = sum(
+        int((evidence.get(name) or {}).get("hit_count") or 0)
+        for name in ("style_index", "mail_index", "fact_index", "visual_index")
+    )
+    if indexed_hits:
+        return False
+
+    serialized_context = json.dumps(app_context or {}, ensure_ascii=False, default=str)
+    return not any(style.casefold() in serialized_context.casefold() for style in styles)
+
+
+def _apply_current_work_no_evidence_guardrail(
+    answer: dict[str, Any],
+    judgment: dict[str, Any],
+    *,
+    response_mode: str = "action",
+) -> dict[str, Any]:
+    protected = dict(answer)
+    classification = judgment.get("classification") or {}
+    subject = str((classification.get("styles") or ["해당 Style"])[0])
+    protected["summary"] = (
+        f"{subject}에 직접 연결된 최신 메일, 파일, 구조화 정보가 현재 검색 범위에서 0건입니다. "
+        "확인되지 않은 회신·제출·승인 업무는 오늘 할 일로 만들지 않았습니다."
+    )
+    protected["recommendation"] = {
+        "state": "source_required",
+        "title": f"{subject}의 확인된 오늘 업무가 없습니다.",
+        "conclusion": (
+            "지금 확정할 수 있는 업무 목록은 없습니다. 먼저 Outlook 메일을 갱신하거나 "
+            "사용할 최신 원본을 지정한 뒤, 확인된 요청과 마감만 오늘 업무로 정리해야 합니다."
+        ),
+        "next_move": f"Outlook 메일을 갱신해 {subject}를 다시 검색하거나 최신 원본 파일 1건을 지정하세요.",
+    }
+    protected["action_plan"] = [
+        _action_step(
+            1,
+            "최신 메일 또는 원본 연결",
+            f"Outlook 메일을 갱신해 {subject}를 다시 검색하거나 사용자가 가진 최신 원본 파일을 지정합니다.",
+            "최신 메일 제목·수신일 또는 원본 파일명 1건이 확인됨",
+            "needs_confirmation",
+        ),
+        _action_step(
+            2,
+            "근거 확인 후 오늘 업무 확정",
+            "확인된 요청사항, 마감, 당사 조치와 상대방 대기 항목만 오늘 목록에 반영합니다.",
+            "각 항목에 근거와 상태가 연결되고 추정 항목이 없음",
+            "after_confirmation",
+        ),
+    ]
+    if response_mode == "summary":
+        protected["action_plan"] = []
+        protected["summary_results"] = []
+        protected["recommendation"]["next_move"] = (
+            f"추가 확인이 필요하면 {subject} 최신 Microsoft 365 메일 또는 원본 파일을 연결할 수 있습니다."
+        )
+    protected["confirmations"] = [f"{subject} 최신 메일 또는 원본 파일"]
+    protected["deliverables"] = []
+    protected["app_actions"] = []
+    protected["status"] = "needs_confirmation"
+    protected["task_suggestions"] = _tasks_from_action_plan(
+        protected["action_plan"],
+        str(judgment.get("query") or ""),
+    )
+    protected["answer_text"] = (
+        f"현재 판단: {protected['recommendation']['title']}\n"
+        f"{protected['recommendation']['conclusion']}\n"
+        "다음 단계: 최신 메일 또는 원본 연결"
+    )
+    return protected
+
+
 def _apply_scoped_mail_unverified_guardrail(
     answer: dict[str, Any],
     mail_scope: dict[str, Any],
     mail_context: dict[str, Any],
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any]:
     sender = str(mail_scope.get("sender") or "지정 발신자").strip()
     date_label = "오늘" if mail_scope.get("received_after") else "지정 기간"
@@ -173,6 +272,7 @@ def _apply_scoped_mail_unverified_guardrail(
             "task_suggestions": [],
             "confirmations": ["Microsoft 365 원본 메일 연결"],
             "app_actions": [],
+            "summary_results": [],
         }
     )
     return guarded
@@ -181,6 +281,8 @@ def _apply_scoped_mail_unverified_guardrail(
 def _apply_scoped_mail_no_hits_guardrail(
     answer: dict[str, Any],
     mail_scope: dict[str, Any],
+    *,
+    response_mode: str = "action",
 ) -> dict[str, Any]:
     sender = str(mail_scope.get("sender") or "지정 발신자").strip()
     date_label = "오늘" if mail_scope.get("received_after") else "지정 기간"
@@ -241,6 +343,13 @@ def _apply_scoped_mail_no_hits_guardrail(
         }
     )
     counts = dict(guarded.get("counts") or {})
+    if response_mode == "summary":
+        guarded["action_plan"] = []
+        guarded["summary_results"] = []
+        guarded["answer_text"] = f"현재 판단: {headline}\n{summary}"
+        guarded["recommendation"]["next_move"] = (
+            "Outlook 원본에 다른 결과가 보이는 경우에만 동기화 후 다시 비교할 수 있습니다."
+        )
     counts["mail"] = 0
     guarded["counts"] = counts
     return guarded
@@ -248,6 +357,7 @@ def _apply_scoped_mail_no_hits_guardrail(
 
 def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     query = str(judgment.get("query") or "").strip()
+    response_mode = _response_mode(query)
     classification = judgment.get("classification") or {}
     evidence = judgment.get("evidence_summary") or {}
     decisions = judgment.get("decisions") or {}
@@ -334,7 +444,11 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         confirmations=confirmations,
         playbook=playbook,
     )
-    task_suggestions = _tasks_from_action_plan(action_plan, query)
+    task_suggestions = (
+        []
+        if response_mode == "summary"
+        else _tasks_from_action_plan(action_plan, query)
+    )
     status = "needs_confirmation" if confirmations else _answer_status(decisions)
     deliverables = _build_deliverables(
         query,
@@ -346,8 +460,12 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
     answer_text_parts = [
         f"현재 판단: {recommendation['title']}",
         recommendation["conclusion"],
-        "실행 순서: " + " / ".join(item["title"] for item in action_plan),
     ]
+    if action_plan:
+        label = "정리 결과" if response_mode == "summary" else "실행 순서"
+        answer_text_parts.append(
+            f"{label}: " + " / ".join(item["title"] for item in action_plan)
+        )
     if confirmations:
         answer_text_parts.append("확인 필요: " + " / ".join(confirmations))
 
@@ -360,9 +478,24 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "headline": headline,
         "summary": summary,
+        "response_mode": response_mode,
         "answer_text": "\n".join(answer_text_parts),
         "recommendation": recommendation,
         "action_plan": action_plan,
+        "summary_results": (
+            [
+                {
+                    "title": item["title"],
+                    "status": item["state"],
+                    "detail": item["instruction"],
+                    "evidence": item["completion_check"],
+                    "remaining_unknown": "",
+                }
+                for item in action_plan
+            ]
+            if response_mode == "summary"
+            else []
+        ),
         "concept": concept,
         "concept_label": concept_label,
         "confidence": confidence,
@@ -374,6 +507,24 @@ def compose_answer(judgment: dict[str, Any]) -> dict[str, Any]:
         "deliverables": deliverables,
         "app_actions": [],
     }
+
+
+def _response_mode(query: str) -> str:
+    """Distinguish a requested status digest from an instruction request."""
+    normalized = " ".join(str(query or "").split())
+    if re.search(
+        r"(정리|요약|리스트(?:업)?|현황|분류|모아\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "summary"
+    if re.search(
+        r"(할\s*일|해야\s*할|액션|실행|처리|초안|작성|만들어\s*줘)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "action"
+    return "action"
 
 
 def _build_case_headline(
@@ -622,11 +773,19 @@ def _build_recommendation(
     if concept == "wip_update":
         return {
             "state": "active_wip_review",
-            "title": f"{subject}의 GAC·지연 후보를 우선순위로 정리해야 합니다.",
-            "conclusion": _portfolio_wip_summary(style_hits),
+            "title": "이번 주 GAC 지연 위험과 회신 대기 후보를 정리했습니다.",
+            "conclusion": (
+                f"{_portfolio_wip_summary(style_hits)} "
+                + (
+                    f"회신 대기 후보는 {_display_date(latest_mail.get('received'))} "
+                    f"'{latest_mail.get('subject') or '제목 없음'}' 메일입니다."
+                    if latest_mail
+                    else "현재 검색 결과에는 회신 대기를 판정할 메일이 없습니다."
+                )
+            ),
             "next_move": (
-                "기한 경과, 이번 주 마감, 회신 대기 순으로 활성 WIP와 메일을 대조하고 "
-                "담당자·다음 Chase 날짜를 확정합니다."
+                "아래 후보별 근거와 TBD를 먼저 검토하면 되며, 원본 확인이 필요한 값만 "
+                "추가 확인 항목에 남겨 두었습니다."
             ),
         }
 
@@ -799,29 +958,7 @@ def _build_action_plan(
         ]
 
     if concept == "wip_update":
-        return [
-            _action_step(
-                1,
-                "기한 경과·이번 주 GAC 후보 분리",
-                "검색 결과를 활성 WIP와 대조해 완료 건을 제외하고 실제 위험 건만 남깁니다.",
-                "위험 Style, GAC와 현재 상태 목록 확정",
-                "do_now",
-            ),
-            _action_step(
-                2,
-                "회신 대기와 담당자 확인",
-                "최신 메일의 마지막 발신자와 회신 여부를 확인해 Waiting·Chase Needed를 구분합니다.",
-                "각 건의 담당자와 다음 Chase 날짜 기록",
-                "do_now",
-            ),
-            _action_step(
-                3,
-                "WIP와 할 일 업데이트",
-                "확정된 상태, 문제점과 다음 행동만 반영하고 근거 메일을 연결합니다.",
-                "중복 없이 업무 건과 할 일 저장",
-                "do_now",
-            ),
-        ]
+        return _wip_result_rows(style_hits, latest_mail)
 
     if concept == "mail_followup":
         return [
@@ -877,6 +1014,71 @@ def _action_step(
         "completion_check": completion_check,
         "state": state,
     }
+
+
+def _wip_result_rows(
+    style_hits: list[dict[str, Any]],
+    latest_mail: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Represent a WIP digest as classified findings, not delegated research steps."""
+    rows: list[dict[str, Any]] = []
+    for item in style_hits[:3]:
+        style_no = str(item.get("style_no") or item.get("style") or "Style 미상")
+        source = PurePath(
+            str(item.get("relative_path") or item.get("source_path") or "WIP 원본")
+        ).name
+        location = str(item.get("location") or item.get("sheet_name") or "").strip()
+        raw = " ".join(
+            str(item.get(key) or "") for key in ("snippet", "raw_compact", "gac_date")
+        )
+        gac_match = re.search(
+            r"\bGAC\s*[=:]?\s*(\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+            raw,
+            re.IGNORECASE,
+        )
+        gac = gac_match.group(1) if gac_match else "날짜 TBD"
+        classification = "GAC 위험 후보" if gac_match else "WIP 검토 후보"
+        place = f" · {location}" if location else ""
+        rows.append(
+            _action_step(
+                len(rows) + 1,
+                f"{style_no} · {classification}",
+                f"{source}{place}가 검색 후보로 확인됐습니다. GAC {gac}, 완료 제외 여부와 현재 진행 상태는 원본 확인 전 TBD입니다.",
+                f"근거: {source}{place}; 확인 필요: 완료 여부·현재 상태",
+                "needs_confirmation",
+            )
+        )
+    if latest_mail and len(rows) < 5:
+        mail_subject = " ".join(str(latest_mail.get("subject") or "제목 없음").split())
+        sender = str(latest_mail.get("sender") or "발신자 미상")
+        received = _display_date(latest_mail.get("received"))
+        rows.append(
+            _action_step(
+                len(rows) + 1,
+                "회신 대기·Chase 판정 후보",
+                f"{received} {sender}의 '{mail_subject}' 메일이 최신 관련 흐름입니다. 마지막 발신자 이후 당사 회신 여부는 현재 캐시만으로 확정되지 않았습니다.",
+                f"근거: {received} '{mail_subject}'; 확인 필요: 마지막 회신 주체·다음 Chase 일자",
+                "needs_confirmation",
+            )
+        )
+    if not rows:
+        return [
+            _action_step(
+                1,
+                "GAC 지연 위험 · 판정 자료 없음",
+                "현재 검색 결과에는 Style별 GAC와 활성 상태를 함께 보여 주는 근거가 없습니다.",
+                "필요 근거: 활성 WIP의 Style·GAC·현재 상태",
+                "blocked",
+            ),
+            _action_step(
+                2,
+                "회신 대기 · 판정 자료 없음",
+                "현재 검색 결과에는 마지막 발신자와 미회신 여부를 판단할 관련 메일이 없습니다.",
+                "필요 근거: 관련 메일의 최신 thread와 마지막 발신자",
+                "blocked",
+            ),
+        ]
+    return rows
 
 
 def _tasks_from_action_plan(

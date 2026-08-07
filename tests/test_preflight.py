@@ -546,6 +546,33 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(check.evidence["dependency_error_count"], 0)
         self.assertEqual(check.evidence["other_error_count"], 1)
 
+    def test_style_parse_health_keeps_large_usable_index_healthy_with_isolated_bad_file(self) -> None:
+        root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"
+        try:
+            root.mkdir(parents=True)
+            db_path = root / "style.sqlite"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("CREATE TABLE files(parse_status TEXT, error TEXT)")
+                conn.executemany(
+                    "INSERT INTO files VALUES ('parsed', NULL)",
+                    [() for _ in range(999)],
+                )
+                conn.execute(
+                    "INSERT INTO files VALUES ('error', 'BadZipFile: invalid workbook')"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            check = check_style_parse_health(db_path)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.evidence["usable_file_count"], 999)
+        self.assertEqual(check.evidence["other_error_count"], 1)
+
     def test_sqlite_helpers_close_connections(self) -> None:
         root = Path.cwd() / ".test_tmp" / f"preflight_{uuid.uuid4().hex}"
         opened: list[sqlite3.Connection] = []

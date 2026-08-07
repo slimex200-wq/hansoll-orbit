@@ -11,6 +11,12 @@ const {
 const { createAgentProviderService } = require("./agent-provider-service.cjs");
 const { createBuyerProfileService } = require("./buyer-profile-service.cjs");
 const { ensureDraftBuyerPack } = require("./buyer-pack-service.cjs");
+const {
+  collectAuxEntries,
+  createAuxRestoreTransaction,
+  recoverIncompleteAuxRestore,
+} = require("./backup-aux-state.cjs");
+const { MAX_BUNDLE_BYTES } = require("./domain-backup.cjs");
 const { createDomainStore } = require("./domain-store.cjs");
 const { createLinkedFolderService } = require("./linked-folder-service.cjs");
 const { detectItReviewMode, seedItReviewStore } = require("./it-review-runtime.cjs");
@@ -127,11 +133,12 @@ function activateDomainStore(status) {
   const configured = Boolean(status?.configured);
   const account = status?.account || null;
   const key = account ? accountKey(account) : configured ? "disconnected" : "legacy";
+  const repaired = recoverIncompleteAuxRestore(localStateConfigPaths(key), domainStateFilePath(key));
+  if ((repaired.recovered || repaired.completed) && buyerProfiles) initializeBuyerProfiles();
   bridge.configureRuntime({ profileKey: key });
   activateLinkedFolderProfile(key);
   if (key === activeDomainKey && store) return;
-  const fileName = key === "legacy" ? "workbench-state.json" : `workbench-state-${key}.json`;
-  store = createDomainStore(path.join(app.getPath("userData"), fileName), {
+  store = createDomainStore(domainStateFilePath(key), {
     actor: account?.username || "local-user",
     contextProvider: () => buyerProfiles?.active?.() || null,
   });
@@ -238,11 +245,12 @@ function businessIndexStatusPath() {
 function persistBusinessIndexStatus() {
   if (!app.isReady()) return;
   const target = businessIndexStatusPath();
+  const { audit: _audit, ...persistedStatus } = businessIndexStatus;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.tmp`;
   fs.writeFileSync(
     temporary,
-    JSON.stringify({ version: 1, status: businessIndexStatus }, null, 2),
+    JSON.stringify({ version: 1, status: persistedStatus }, null, 2),
     "utf8",
   );
   fs.renameSync(temporary, target);
@@ -254,7 +262,8 @@ function restoreBusinessIndexStatus() {
   try {
     const record = JSON.parse(fs.readFileSync(target, "utf8"));
     if (!record?.status || typeof record.status !== "object") return;
-    businessIndexStatus = { ...businessIndexStatus, ...record.status };
+    const { audit: _staleAudit, ...persistedStatus } = record.status;
+    businessIndexStatus = { ...businessIndexStatus, ...persistedStatus, audit: undefined };
     if (businessIndexStatus.state === "running") {
       businessIndexStatus = {
         ...businessIndexStatus,
@@ -674,6 +683,174 @@ function approveArtifactJob(jobId) {
   });
 }
 
+function localStateConfigPaths(key = activeDomainKey || "legacy") {
+  const safeKey = String(key || "legacy").replace(/[^a-z0-9_-]/gi, "_");
+  return {
+    buyerProfiles: path.join(app.getPath("userData"), "buyer-profiles.json"),
+    linkedFolders: key === "legacy"
+      ? path.join(app.getPath("userData"), "linked-folders.json")
+      : path.join(app.getPath("userData"), "profiles", key, "linked-folders.json"),
+    appPreferences: path.join(app.getPath("userData"), "app-preferences.json"),
+    buyerPacksDir: path.join(app.getPath("userData"), "buyer-packs"),
+    restoreTransactionDir: path.join(app.getPath("userData"), "restore-transactions", safeKey),
+  };
+}
+
+function domainStateFilePath(key = activeDomainKey || "legacy") {
+  const fileName = key === "legacy" ? "workbench-state.json" : `workbench-state-${key}.json`;
+  return path.join(app.getPath("userData"), fileName);
+}
+
+function initializeBuyerProfiles() {
+  buyerProfiles = createBuyerProfileService({
+    configPath: localStateConfigPaths().buyerProfiles,
+    onChanged: () => {
+      void publishBuyerProfileSnapshot();
+    },
+  });
+}
+
+function localStateHealth() {
+  const health = store.getHealth();
+  const events = store.getState().auditEvents || [];
+  const eventAt = (action) => events.find((item) => item.action === action)?.createdAt || null;
+  const recoveryKind = health.backupKind === "recovery"
+    ? "automatic"
+    : health.backupKind === "pre-restore"
+      ? "pre_restore"
+      : health.status === "degraded_empty"
+        ? "corrupt_preserved"
+        : "none";
+  return {
+    status: health.status,
+    schemaVersion: store.getState().schemaVersion,
+    lastBackupAt: eventAt("backup.created"),
+    lastRestoreAt: eventAt("restore.applied"),
+    recoveryKind,
+    errorCode: health.errorCode || "",
+  };
+}
+
+function e2eBackupPath() {
+  if (!deterministicTestMode) return "";
+  const candidate = String(process.env.OPENCRAB_E2E_BACKUP_PATH || "");
+  return path.isAbsolute(candidate) ? path.normalize(candidate) : "";
+}
+
+function safeLocalStateErrorCode(error) {
+  const candidate = String(error?.code || error?.message || "restore_rejected")
+    .split(":", 1)[0]
+    .toLowerCase();
+  return /^[a-z0-9_]{1,80}$/.test(candidate) ? candidate : "restore_rejected";
+}
+
+function recordLocalStateDiagnostic(action, error) {
+  const diagnosticPath = path.join(app.getPath("userData"), "local-state-diagnostics.jsonl");
+  fs.appendFileSync(diagnosticPath, `${JSON.stringify({
+    createdAt: new Date().toISOString(),
+    action,
+    errorCode: safeLocalStateErrorCode(error),
+  })}\n`, "utf8");
+  if (fs.statSync(diagnosticPath).size > 256 * 1024) {
+    const lines = fs.readFileSync(diagnosticPath, "utf8").trim().split(/\r?\n/).slice(-500);
+    const temporaryPath = `${diagnosticPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryPath, `${lines.join("\n")}\n`, "utf8");
+    fs.renameSync(temporaryPath, diagnosticPath);
+  }
+}
+
+async function exportLocalStateBackup() {
+  const configuredPath = e2eBackupPath();
+  let targetPath = configuredPath;
+  if (!targetPath) {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "HANSOLL ORBIT local-state backup",
+      defaultPath: `hansoll-orbit-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "HANSOLL ORBIT Backup", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) return { status: "cancelled" };
+    targetPath = result.filePath;
+  }
+  const bundle = store.createBackupBundle({
+    appVersion: app.getVersion(),
+    profileKey: activeDomainKey || "legacy",
+    auxEntries: collectAuxEntries(localStateConfigPaths()),
+  });
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, bundle, { encoding: "utf8", flag: "w" });
+  const health = localStateHealth();
+  return { status: "created", createdAt: health.lastBackupAt };
+}
+
+async function restoreLocalStateBackup() {
+  const configuredPath = e2eBackupPath();
+  let sourcePath = configuredPath;
+  if (!sourcePath) {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Restore HANSOLL ORBIT local-state backup",
+      properties: ["openFile"],
+      filters: [{ name: "HANSOLL ORBIT Backup", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return { status: "cancelled" };
+    sourcePath = result.filePaths[0];
+  }
+  let bundle;
+  let validated;
+  let auxTransaction;
+  try {
+    const stat = fs.statSync(sourcePath);
+    if (!stat.isFile() || stat.size > MAX_BUNDLE_BYTES) {
+      throw new Error("backup_bundle_too_large");
+    }
+    bundle = fs.readFileSync(sourcePath, "utf8");
+    validated = store.validateBackupBundle(bundle);
+    auxTransaction = createAuxRestoreTransaction(validated.entries, localStateConfigPaths(), {
+      bundleSha256: validated.bundleSha256,
+    });
+  } catch (error) {
+    recordLocalStateDiagnostic("restore.rejected", error);
+    throw error;
+  }
+  if (!configuredPath) {
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      buttons: ["Cancel", "Restore backup"],
+      defaultId: 0,
+      cancelId: 0,
+      title: "Restore local state",
+      message: "Restore this validated backup?",
+      detail: "ORBIT creates a pre-restore recovery point before replacing current local work state.",
+      noLink: true,
+    });
+    if (confirmation.response !== 1) return { status: "cancelled" };
+  }
+  let result;
+  try {
+    const recoveryPath = store.createPreRestoreRecoveryPoint(bundle);
+    auxTransaction.prepare();
+    auxTransaction.commit();
+    result = store.restoreBackupBundle(bundle, { recoveryPath });
+  } catch (error) {
+    auxTransaction.rollback();
+    recordLocalStateDiagnostic("restore.failed", error);
+    throw error;
+  }
+  try {
+    auxTransaction.complete();
+  } catch (error) {
+    recordLocalStateDiagnostic("restore.cleanup_pending", error);
+  }
+  initializeBuyerProfiles();
+  linkedFolderProfileKey = "";
+  activateLinkedFolderProfile(activeDomainKey || "legacy");
+  approveStoredOutputPaths(store.getState());
+  return {
+    status: "restored",
+    restoredAt: localStateHealth().lastRestoreAt,
+    restartRequired: result.restartRequired,
+  };
+}
+
 function registerIpc() {
   agentActions = createAgentActionService({
     getStore: () => store,
@@ -722,9 +899,16 @@ function registerIpc() {
   handle("opencrab:index-status", () => structuredClone(businessIndexStatus));
   handle("opencrab:initialize-indexes", () => initializeBusinessIndexes());
   handle("opencrab:agent-status", () => agentProviders.getStatus());
-  handle("opencrab:agent-provider-select", (_event, input = {}) =>
-    agentProviders.select(String(input.providerId || ""), String(input.model || "") || undefined),
-  );
+  handle("opencrab:agent-provider-select", async (_event, input = {}) => {
+    const delayMs = deterministicTestMode
+      ? Number.parseInt(process.env.OPENCRAB_E2E_MODEL_SELECT_DELAY_MS || "0", 10)
+      : 0;
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return agentProviders.select(
+      String(input.providerId || ""),
+      String(input.model || "") || undefined,
+    );
+  });
   handle("opencrab:agent-provider-connect", (_event, providerId) =>
     agentProviders.connect(String(providerId || "")),
   );
@@ -825,16 +1009,24 @@ function registerIpc() {
     approveStoredOutputPaths(state);
     return state;
   });
+  handle("domain:get-health", () => localStateHealth());
+  handle("domain:export-backup", () => exportLocalStateBackup());
+  handle("domain:restore-backup", () => restoreLocalStateBackup());
   handle("domain:create-case", (_event, input) => store.createCase(input));
   handle("domain:create-case-with-tasks", (_event, input) =>
     store.createCaseWithTasks(input),
   );
   handle("domain:update-case", (_event, input) => store.updateCase(input));
+  handle("domain:delete-case", (_event, id) => store.deleteCase(id));
   handle("domain:create-task", (_event, input) => store.createTask(input));
   handle("domain:update-task", (_event, input) => store.updateTask(input));
+  handle("domain:delete-task", (_event, id) => store.deleteTask(id));
   handle("domain:create-milestone", (_event, input) => store.createMilestone(input));
   handle("domain:update-milestone", (_event, input) => store.updateMilestone(input));
+  handle("domain:delete-milestone", (_event, id) => store.deleteMilestone(id));
   handle("domain:create-decision", (_event, input) => store.createDecision(input));
+  handle("domain:update-decision", (_event, input) => store.updateDecision(input));
+  handle("domain:delete-decision", (_event, id) => store.deleteDecision(id));
   handle("domain:create-artifact-job", (_event, input = {}) => createArtifactJob(input));
   handle("microsoft:get-status", () => microsoftMail.getStatus());
   handle("microsoft:sign-in", () => microsoftMail.signIn());
@@ -884,13 +1076,9 @@ if (!hasSingleInstanceLock) {
     userDataPath: app.getPath("userData"),
   });
   restoreBusinessIndexStatus();
+  recoverIncompleteAuxRestore(localStateConfigPaths("legacy"), domainStateFilePath("legacy"));
   activateLinkedFolderProfile("legacy");
-  buyerProfiles = createBuyerProfileService({
-    configPath: path.join(app.getPath("userData"), "buyer-profiles.json"),
-    onChanged: () => {
-      void publishBuyerProfileSnapshot();
-    },
-  });
+  initializeBuyerProfiles();
   syncActiveBuyerRuntime();
   agentCodexHome = path.join(app.getPath("userData"), "codex-home");
   agentProviders = createAgentProviderService({

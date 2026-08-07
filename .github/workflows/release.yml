@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel for the manifest.
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
+      dry_run:
+        description: Build and verify without publishing.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-nsis:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: apps/desktop
+    env:
+      ORBIT_RELEASE_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'stable' }}
+      ORBIT_RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "0"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Fail closed when signing secrets are absent
+        run: |
+          if (-not $env:WIN_CSC_LINK -or -not $env:WIN_CSC_KEY_PASSWORD) {
+            throw "Release signing secrets WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD are required."
+          }
+
+      - name: Install Python packaging dependencies
+        working-directory: .
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pymsalruntime pytest
+
+      - name: Install desktop dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run release-manifest tests
+        run: node --test scripts/release-manifest.test.mjs scripts/verify-production-release.test.mjs
+
+      - name: Build signed production NSIS installer
+        run: npm run package:prod
+
+      - name: Create release manifest from signed installer
+        run: npm run release:manifest:create -- --channel $env:ORBIT_RELEASE_CHANNEL
+
+      - name: Verify release manifest and Authenticode signature
+        run: npm run release:manifest:verify -- --channel $env:ORBIT_RELEASE_CHANNEL
+
+      - name: Upload dry-run artifacts
+        if: env.ORBIT_RELEASE_DRY_RUN == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: orbit-release-dry-run
+          path: |
+            apps/desktop/release/production-build/*.exe
+            apps/desktop/release/production-build/release-manifest.json
+
+      - name: Publish verified GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.ORBIT_RELEASE_DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $manifestPath = "release/production-build/release-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $installerPath = Join-Path "release/production-build" $manifest.installer.fileName
+          if (-not (Test-Path -LiteralPath $installerPath)) {
+            throw "The installer named by the verified manifest was not found."
+          }
+          gh release create $tag $installerPath $manifestPath `
+            --title "HANSOLL ORBIT $tag" `
+            --notes "Verified signed NSIS installer and release manifest." `
+            --verify-tag

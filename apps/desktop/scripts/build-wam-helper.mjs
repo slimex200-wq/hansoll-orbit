@@ -6,12 +6,16 @@ import { fileURLToPath } from "node:url";
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDirectory, "..");
 const repoRoot = path.resolve(appRoot, "../..");
-const python = process.env.OPENCRAB_PYTHON
-  || path.join(repoRoot, ".venv", "Scripts", "python.exe");
+const pythonCandidates = [
+  process.env.OPENCRAB_PYTHON,
+  path.join(repoRoot, ".venv", "Scripts", "python.exe"),
+  "python.exe",
+].filter(Boolean);
+const python = pythonCandidates.find((candidate) =>
+  candidate === "python.exe" || fs.existsSync(candidate),
+);
 
-if (!fs.existsSync(python)) {
-  throw new Error(`Python runtime not found: ${python}`);
-}
+if (!python) throw new Error("Python runtime for the WAM helper build was not found.");
 
 const outputRoot = path.join(appRoot, "native", "wam-broker");
 const output = path.join(outputRoot, "dist", "opencrab-wam-broker.exe");

@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cloud,
   Database,
+  Download,
   FolderOpen,
   FolderPlus,
   FileStack,
@@ -18,6 +19,7 @@ import {
   Palette,
   Plug,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   ShieldOff,
@@ -26,6 +28,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { Badge, ErrorBanner, LoadingBlock } from "../components/UI";
 import { presentError } from "../lib";
 import type {
@@ -36,6 +39,8 @@ import type {
   BuyerRecommendation,
   BusinessIndexStatus,
   LinkedFolder,
+  LocalStateBackupResult,
+  LocalStateHealth,
   MicrosoftStatus,
   TemplateRegistryItem,
   ThemeMode,
@@ -179,8 +184,95 @@ export function AdminView({
   const [buyerAction, setBuyerAction] = useState("");
   const [folderAction, setFolderAction] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [localStateHealth, setLocalStateHealth] = useState<LocalStateHealth | null>(null);
+  const [dataAction, setDataAction] = useState<"export" | "restore" | null>(null);
+  const [dataNotice, setDataNotice] = useState("");
   const agentLoginPollRef = useRef<number | null>(null);
   const outlookConsentPromptRef = useRef("");
+  const settingsContentRef = useRef<HTMLElement | null>(null);
+  const [settingsScroll, setSettingsScroll] = useState({ progress: 0, visible: false });
+
+  const updateSettingsScroll = (element: HTMLElement | null) => {
+    if (!element) return;
+    const scrollRange = Math.max(0, element.scrollHeight - element.clientHeight);
+    setSettingsScroll({
+      progress: scrollRange > 0 ? element.scrollTop / scrollRange : 0,
+      visible: scrollRange > 1,
+    });
+  };
+
+  const seekSettingsScroll = (progress: number, behavior: ScrollBehavior) => {
+    const element = settingsContentRef.current;
+    if (!element) return;
+    const scrollRange = Math.max(0, element.scrollHeight - element.clientHeight);
+    element.scrollTo({
+      top: Math.min(1, Math.max(0, progress)) * scrollRange,
+      behavior,
+    });
+  };
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const element = settingsContentRef.current;
+      if (!element) return;
+      element.scrollTop = 0;
+      updateSettingsScroll(element);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [section]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      updateSettingsScroll(settingsContentRef.current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [audit, businessIndexStatus, buyerContext, linkedFolders.length, loading, templates.length]);
+
+  const refreshLocalStateHealth = async () => {
+    const health = await window.opencrab.getLocalStateHealth();
+    setLocalStateHealth(health);
+    return health;
+  };
+
+  useEffect(() => {
+    let active = true;
+    window.opencrab.getLocalStateHealth().then((health) => {
+      if (active) setLocalStateHealth(health);
+    }).catch((caught) => {
+      if (active) setError(presentError(caught, "로컬 저장 상태를 확인하지 못했습니다."));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const runDataAction = async (
+    kind: "export" | "restore",
+    action: () => Promise<LocalStateBackupResult>,
+  ) => {
+    setDataAction(kind);
+    setDataNotice("");
+    setError("");
+    try {
+      const result = await action();
+      if (result.status === "cancelled") return;
+      await refreshLocalStateHealth();
+      setDataNotice(
+        kind === "export"
+          ? "암호·메일 원문·검색 색인을 제외한 ORBIT 백업을 저장했습니다."
+          : "백업을 검증한 뒤 복원했습니다. 화면을 새로 불러옵니다.",
+      );
+      if (kind === "restore") window.location.reload();
+    } catch (caught) {
+      setError(presentError(
+        caught,
+        kind === "export" ? "백업을 저장하지 못했습니다." : "백업을 복원하지 못했습니다.",
+      ));
+      await refreshLocalStateHealth().catch(() => null);
+    } finally {
+      setDataAction(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -281,6 +373,7 @@ export function AdminView({
       const [nextAudit] = await Promise.all([
         window.opencrab.audit(),
         onAgentRefresh(),
+        refreshLocalStateHealth(),
       ]);
       onAuditChanged(nextAudit);
     } catch (caught) {
@@ -535,6 +628,12 @@ export function AdminView({
       }).format(new Date(microsoft.lastSyncAt))
     : "아직 동기화하지 않음";
 
+  const microsoftConnected = microsoft?.state === "connected";
+  const usesDesktopOutlook = microsoft?.authMode === "outlook_desktop";
+  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
+  const partialMailCount = microsoft?.lastSyncResult?.totalMessages ?? 0;
+  const outlookConsentRequired = usesDesktopOutlook && microsoft?.consentRequired === true;
+  const displayedMicrosoftAccount = microsoft?.account || microsoft?.detectedAccount || null;
   const agentDiagnosticStatus: "pass" | "warn" =
     agentStatus?.mode === "model_ready" ? "pass" : "warn";
   const agentDiagnosticDetail =
@@ -546,9 +645,16 @@ export function AdminView({
       ? "warn"
       : microsoft.syncState === "error" || microsoft.syncState === "needs_sign_in"
         ? "fail"
-        : microsoft.syncState === "ready_with_warnings" || microsoft.syncState === "syncing"
+        : microsoft.syncState === "ready_with_warnings" && !hasPartialMailSource
           ? "warn"
           : "pass";
+  const outlookDiagnosticLabel = microsoft?.syncState === "syncing"
+    ? "동기화 중"
+    : outlookDiagnosticStatus === "pass"
+      ? "정상"
+      : outlookDiagnosticStatus === "fail"
+        ? "사용 불가"
+        : "연결 확인";
   const outlookDiagnosticDetail =
     microsoft?.state === "connected"
       ? microsoft.syncState === "syncing"
@@ -560,16 +666,11 @@ export function AdminView({
         ? `${microsoft.detectedAccount?.username ?? "Outlook 계정"} · 최초 연결 승인 필요`
         : "Outlook 회사 계정 연결이 필요합니다.";
 
-  const microsoftConnected = microsoft?.state === "connected";
-  const usesDesktopOutlook = microsoft?.authMode === "outlook_desktop";
-  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
-  const partialMailCount = microsoft?.lastSyncResult?.totalMessages ?? 0;
-  const outlookConsentRequired = usesDesktopOutlook && microsoft?.consentRequired === true;
-  const displayedMicrosoftAccount = microsoft?.account || microsoft?.detectedAccount || null;
   const businessIndexesPreparing = businessIndexStatus?.state === "running";
   const businessIndexNames = new Set([
     "thin_file_index",
     "style_index",
+    "visual_sketch_index",
   ]);
   const hasBusinessIndexProblems = (audit?.items ?? []).some(
     (item) => businessIndexNames.has(item.name) && item.status !== "pass",
@@ -672,7 +773,13 @@ export function AdminView({
               <span>상태 새로고침</span>
             </button>
           </div>
-          <main className="settings-content" data-testid="settings-content">
+          <div className="settings-content-frame">
+          <main
+            className="settings-content"
+            data-testid="settings-content"
+            onScroll={(event) => updateSettingsScroll(event.currentTarget)}
+            ref={settingsContentRef}
+          >
             {error ? <ErrorBanner message={error} /> : null}
             {loading ? (
               <LoadingBlock label="ORBIT 상태를 점검하는 중" state="working" />
@@ -1403,7 +1510,7 @@ export function AdminView({
                     </div>
                     <Badge
                       tone={agentDiagnosticStatus === "pass" ? "success" : "warning"}
-                      value={agentDiagnosticStatus === "pass" ? "정보성" : "품질 저하"}
+                      value={agentDiagnosticStatus === "pass" ? "정상" : "대체 모드"}
                     />
                   </div>
                   <div className="admin-row">
@@ -1432,11 +1539,7 @@ export function AdminView({
                             : "warning"
                       }
                       value={
-                        outlookDiagnosticStatus === "pass"
-                            ? "정보성"
-                            : outlookDiagnosticStatus === "fail"
-                              ? "업무 차단"
-                              : "품질 저하"
+                        outlookDiagnosticLabel
                       }
                     />
                   </div>
@@ -1472,10 +1575,10 @@ export function AdminView({
                         }
                         value={
                           item.status === "pass"
-                            ? "정보성"
+                            ? "정상"
                             : item.status === "warn"
-                              ? "품질 저하"
-                              : "업무 차단"
+                              ? "확인 필요"
+                              : "사용 불가"
                         }
                       />
                     </div>
@@ -1484,47 +1587,48 @@ export function AdminView({
               </SettingsGroup>
 
               {audit?.next_actions.length ? (
-                <>
-                  <h3 className="settings-subheading">조치 필요</h3>
-                  <SettingsGroup>
-                    <ol className="action-list settings-action-list">
-                      {audit.next_actions.map((item) => (
-                        <li key={item}>{auditAction(item)}</li>
-                      ))}
-                    </ol>
-                    <div className="settings-remediation-actions">
-                      {hasBusinessIndexProblems ? (
-                        <button
-                          className="primary-button"
-                          disabled={businessIndexesPreparing}
-                          onClick={() => void prepareBusinessIndexes()}
-                          type="button"
-                        >
-                          <Database size={15} />
-                          {businessIndexesPreparing ? "업무 자료 준비 중" : "업무 검색 자료 준비"}
-                        </button>
-                      ) : null}
-                      {hasMailProblem ? (
-                        <button
-                          className={hasBusinessIndexProblems ? "secondary-button" : "primary-button"}
-                          disabled={mailAction !== null}
-                          onClick={() =>
-                            microsoftConnected
-                              ? void runMailAction("sync", () => window.opencrab.syncMicrosoftMail())
-                              : setSection("connections")
-                          }
-                          type="button"
-                        >
-                          <RefreshCw className={mailAction === "sync" ? "spin" : ""} size={15} />
-                          {microsoftConnected ? "Outlook 메일 다시 가져오기" : "Outlook 연결 설정"}
-                        </button>
-                      ) : null}
-                      <button className="secondary-button" onClick={() => void refresh()} type="button">
-                        상태 다시 확인
+                <section aria-labelledby="settings-remediation-title" className="settings-remediation">
+                  <div className="settings-remediation-heading">
+                    <AlertTriangle aria-hidden="true" size={16} />
+                    <h3 id="settings-remediation-title">조치 필요</h3>
+                  </div>
+                  <ol className="action-list settings-action-list">
+                    {audit.next_actions.map((item) => (
+                      <li key={item}>{auditAction(item)}</li>
+                    ))}
+                  </ol>
+                  <div className="settings-remediation-actions">
+                    {hasBusinessIndexProblems ? (
+                      <button
+                        className="primary-button"
+                        disabled={businessIndexesPreparing}
+                        onClick={() => void prepareBusinessIndexes()}
+                        type="button"
+                      >
+                        <Database size={15} />
+                        {businessIndexesPreparing ? "업무 자료 준비 중" : "업무 검색 자료 준비"}
                       </button>
-                    </div>
-                  </SettingsGroup>
-                </>
+                    ) : null}
+                    {hasMailProblem ? (
+                      <button
+                        className={hasBusinessIndexProblems ? "secondary-button" : "primary-button"}
+                        disabled={mailAction !== null}
+                        onClick={() =>
+                          microsoftConnected
+                            ? void runMailAction("sync", () => window.opencrab.syncMicrosoftMail())
+                            : setSection("connections")
+                        }
+                        type="button"
+                      >
+                        <RefreshCw className={mailAction === "sync" ? "spin" : ""} size={15} />
+                        {microsoftConnected ? "Outlook 메일 다시 가져오기" : "Outlook 연결 설정"}
+                      </button>
+                    ) : null}
+                    <button className="secondary-button" onClick={() => void refresh()} type="button">
+                      상태 다시 확인
+                    </button>
+                  </div>
+                </section>
               ) : null}
             </SettingsPage>
           ) : null}
@@ -1534,6 +1638,84 @@ export function AdminView({
               description="회사 자료를 찾고 산출물을 만들 때 적용되는 통제 원칙입니다."
               title="데이터 및 권한"
             >
+              <span className="settings-group-label">로컬 상태 및 백업</span>
+              <SettingsGroup>
+                <SettingsRow
+                  action={
+                    <Badge
+                      tone={
+                        localStateHealth?.status === "healthy"
+                          ? "success"
+                          : localStateHealth?.status === "degraded_recovered"
+                            ? "warning"
+                            : "danger"
+                      }
+                      value={
+                        localStateHealth?.status === "healthy"
+                          ? "정상"
+                          : localStateHealth?.status === "degraded_recovered"
+                            ? "자동 복구됨"
+                            : localStateHealth
+                              ? "복구 확인 필요"
+                              : "확인 중"
+                      }
+                    />
+                  }
+                  description={
+                    localStateHealth?.status === "degraded_recovered"
+                      ? "손상된 원본을 보존하고 최근 정상 복구 지점으로 열었습니다. 백업을 새로 저장하세요."
+                      : localStateHealth?.status === "degraded_empty"
+                        ? "정상 복구 지점을 찾지 못했습니다. 기존 손상본은 보존되어 있습니다."
+                        : `스키마 v${localStateHealth?.schemaVersion ?? "-"} · 저장 파일 무결성 검사 사용`
+                  }
+                  icon={<Database size={18} />}
+                  title="ORBIT 업무 상태"
+                />
+                <SettingsRow
+                  action={
+                    <div className="provider-actions">
+                      <button
+                        className="secondary-button"
+                        disabled={dataAction !== null}
+                        onClick={() => void runDataAction(
+                          "export",
+                          () => window.opencrab.exportLocalStateBackup(),
+                        )}
+                        type="button"
+                      >
+                        <Download size={15} />
+                        {dataAction === "export" ? "저장 중" : "백업 저장"}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={dataAction !== null}
+                        onClick={() => void runDataAction(
+                          "restore",
+                          () => window.opencrab.restoreLocalStateBackup(),
+                        )}
+                        type="button"
+                      >
+                        <RotateCcw size={15} />
+                        {dataAction === "restore" ? "검증 중" : "백업 복원"}
+                      </button>
+                    </div>
+                  }
+                  description={
+                    localStateHealth?.lastBackupAt
+                      ? `최근 백업 ${new Date(localStateHealth.lastBackupAt).toLocaleString("ko-KR")}`
+                      : "새 PC 이동용 백업에는 메일 원문, 검색 DB, 로그인 정보가 포함되지 않습니다."
+                  }
+                  icon={<Download size={18} />}
+                  title="개인 업무 백업"
+                />
+              </SettingsGroup>
+              {dataNotice ? (
+                <div className="connection-message neutral">
+                  <CheckCircle2 size={16} />
+                  <span>{dataNotice}</span>
+                </div>
+              ) : null}
+              <span className="settings-group-label">데이터 통제 원칙</span>
               <SettingsGroup>
                 <SettingsRow
                   description="출처 없는 값은 자동 확정하지 않습니다."
@@ -1564,6 +1746,12 @@ export function AdminView({
             </SettingsPage>
           ) : null}
           </main>
+          <SettingsScrollRail
+            onSeek={seekSettingsScroll}
+            progress={settingsScroll.progress}
+            visible={settingsScroll.visible}
+          />
+          </div>
         </div>
       </div>
 
@@ -1605,14 +1793,23 @@ function SettingsNavigationGroup({
       <span>{label}</span>
       {items.map((item) => {
         const Icon = item.icon;
+        const active = section === item.id;
         return (
           <button
-            aria-current={section === item.id ? "page" : undefined}
-            className={section === item.id ? "active" : ""}
+            aria-current={active ? "page" : undefined}
+            className={active ? "active" : ""}
             key={item.id}
             onClick={() => onSelect(item.id)}
             type="button"
           >
+            {active ? (
+              <motion.span
+                aria-hidden="true"
+                className="settings-nav-active-surface"
+                layoutId="settings-navigation-active"
+                transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              />
+            ) : null}
             <Icon size={16} />
             <span>{item.label}</span>
           </button>
@@ -1643,13 +1840,103 @@ function SettingsPage({
   children: ReactNode;
 }) {
   return (
-    <section className="settings-page">
+    <motion.section
+      animate={{ opacity: 1, y: 0 }}
+      className="settings-page"
+      initial={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+    >
       <header className="settings-page-header">
         <h2>{title}</h2>
         <p>{description}</p>
       </header>
       {children}
-    </section>
+    </motion.section>
+  );
+}
+
+const SETTINGS_SCROLL_TICK_COUNT = 23;
+
+function SettingsScrollRail({
+  onSeek,
+  progress,
+  visible,
+}: {
+  onSeek: (progress: number, behavior: ScrollBehavior) => void;
+  progress: number;
+  visible: boolean;
+}) {
+  const clampedProgress = Math.min(1, Math.max(0, progress));
+  const activeIndex = Math.round(clampedProgress * (SETTINGS_SCROLL_TICK_COUNT - 1));
+  const [scrubTarget, setScrubTarget] = useState<number | null>(null);
+  const pointerStartRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
+
+  const seekFromPointer = (element: HTMLElement, clientY: number) => {
+    const bounds = element.getBoundingClientRect();
+    const ratio = bounds.height > 0 ? (clientY - bounds.top) / bounds.height : 0;
+    const index = Math.round(
+      Math.min(1, Math.max(0, ratio)) * (SETTINGS_SCROLL_TICK_COUNT - 1),
+    );
+    setScrubTarget(index);
+    onSeek(index / (SETTINGS_SCROLL_TICK_COUNT - 1), "auto");
+  };
+
+  return (
+    <div
+      aria-label="설정 페이지 위치"
+      className={visible ? "settings-scroll-rail visible" : "settings-scroll-rail"}
+      data-scrubbing={scrubTarget !== null ? "true" : undefined}
+      onPointerCancel={() => {
+        pointerStartRef.current = null;
+        setScrubTarget(null);
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        pointerStartRef.current = event.clientY;
+        suppressClickRef.current = false;
+        seekFromPointer(event.currentTarget, event.clientY);
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+        if (pointerStartRef.current !== null && Math.abs(event.clientY - pointerStartRef.current) > 3) {
+          suppressClickRef.current = true;
+        }
+        seekFromPointer(event.currentTarget, event.clientY);
+      }}
+      onPointerUp={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        pointerStartRef.current = null;
+        setScrubTarget(null);
+      }}
+      role="navigation"
+    >
+      <div className="settings-scroll-ticks">
+        {Array.from({ length: SETTINGS_SCROLL_TICK_COUNT }, (_, index) => (
+          <button
+            aria-current={index === activeIndex ? "location" : undefined}
+            aria-label={`설정 페이지 ${index + 1}/${SETTINGS_SCROLL_TICK_COUNT} 위치로 이동`}
+            className="settings-scroll-tick"
+            data-active={index === activeIndex ? "true" : undefined}
+            data-scrub-target={index === scrubTarget ? "true" : undefined}
+            key={index}
+            onClick={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
+              onSeek(index / (SETTINGS_SCROLL_TICK_COUNT - 1), "smooth");
+            }}
+            type="button"
+          >
+            <span />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

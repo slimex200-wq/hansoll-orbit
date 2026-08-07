@@ -9,13 +9,17 @@ import {
   ExternalLink,
   FileOutput,
   FileSearch,
+  LoaderCircle,
   Mail,
   Play,
+  RefreshCw,
   Save,
   Send,
   ShieldCheck,
   X,
 } from "lucide-react";
+import { motion } from "motion/react";
+import { AgentExecutionPulse } from "../components/Motion";
 import { Badge, ErrorBanner, LoadingBlock } from "../components/UI";
 import { extractPath, formatDate, presentError } from "../lib";
 import type {
@@ -91,13 +95,6 @@ function requiresFreshMail(query: string) {
   return /(최신|최근|오늘.*메일|latest|newest|recent mail)/i.test(query);
 }
 
-function formatElapsed(seconds: number) {
-  if (seconds < 60) return `${seconds}초`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return remainingSeconds ? `${minutes}분 ${remainingSeconds}초` : `${minutes}분`;
-}
-
 function taskSourceLabel(value: string | undefined, result: WorkAgentResult): string {
   if (
     value &&
@@ -154,11 +151,11 @@ export function AgentView({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [savedCase, setSavedCase] = useState<WorkCase | null>(null);
   const [savedMerged, setSavedMerged] = useState(false);
-  const [freshnessBlocked, setFreshnessBlocked] = useState(false);
   const [answeredFromSavedMail, setAnsweredFromSavedMail] = useState(false);
-  const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [mailRefreshing, setMailRefreshing] = useState(false);
   const [modelChanging, setModelChanging] = useState(false);
+  const [pendingModel, setPendingModel] =
+    useState<{ label: string; profile: string } | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectedActionIds, setSelectedActionIds] = useState<string[]>([]);
   const [executingActions, setExecutingActions] = useState(false);
@@ -168,7 +165,6 @@ export function AgentView({
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
-  const resumeAfterMailSyncRef = useRef(false);
 
   const clearScopedAgentErrors = () => {
     setError("");
@@ -206,13 +202,13 @@ export function AgentView({
     request: string,
     options: { fromSavedMail?: boolean } = {},
   ) => {
+    if (modelChanging) return;
     setSubmittedQuery(request);
     setResult(null);
     setLoading(true);
     setError("");
     setSavedCase(null);
     setSavedMerged(false);
-    setFreshnessBlocked(false);
     setAnsweredFromSavedMail(Boolean(options.fromSavedMail));
     try {
       const response = await window.opencrab.runAgent(request);
@@ -239,6 +235,10 @@ export function AgentView({
     setModelMenuOpen(false);
     const [providerId, model] = value.split("::") as [AgentProviderId, string];
     if (!providerId || !model || modelChanging || loading) return;
+    const target = agentStatus?.providers
+      .find((provider) => provider.id === providerId)
+      ?.model_options?.find((option) => option.id === model);
+    setPendingModel({ label: target?.label ?? model, profile: target?.profile ?? "균형" });
     setModelChanging(true);
     setError("");
     try {
@@ -247,78 +247,18 @@ export function AgentView({
       setError(agentErrorMessage(caught, "답변 모델을 변경하지 못했습니다."));
     } finally {
       setModelChanging(false);
+      setPendingModel(null);
     }
   };
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const request = query.trim();
-    if (!request || loading) return;
+    if (!request || loading || modelChanging) return;
     setQuery("");
-    if (microsoft?.syncState === "syncing" && requiresFreshMail(request)) {
-      resumeAfterMailSyncRef.current = true;
-      setSubmittedQuery(request);
-      setResult(null);
-      setFreshnessBlocked(true);
-      setAnsweredFromSavedMail(false);
-      setError("");
-      requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: 0 }));
-      return;
-    }
-    if (microsoft?.syncState === "syncing") {
-      await executeQuery(request, { fromSavedMail: true });
-      return;
-    }
-    if (requiresFreshMail(request) && audit?.ready_for_mail_dependent_work === false) {
-      setSubmittedQuery(request);
-      setResult(null);
-      setFreshnessBlocked(true);
-      setAnsweredFromSavedMail(false);
-      setError("");
-      requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: 0 }));
-      return;
-    }
-    await executeQuery(request);
-  };
-
-  useEffect(() => {
-    if (
-      !resumeAfterMailSyncRef.current
-      || !submittedQuery
-      || loading
-      || !["ready", "ready_with_warnings"].includes(microsoft?.syncState ?? "")
-    ) {
-      return;
-    }
-    resumeAfterMailSyncRef.current = false;
-    setFreshnessBlocked(false);
-    void executeQuery(submittedQuery);
-  }, [microsoft?.syncState, submittedQuery, loading]);
-
-  useEffect(() => {
-    if (microsoft?.syncState !== "syncing") {
-      setSyncElapsedSeconds(0);
-      return;
-    }
-    const parsedStartedAt = microsoft.syncStartedAt
-      ? new Date(microsoft.syncStartedAt).getTime()
-      : Date.now();
-    const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now();
-    const updateElapsed = () => {
-      setSyncElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
-    };
-    updateElapsed();
-    const timer = window.setInterval(updateElapsed, 1_000);
-    return () => window.clearInterval(timer);
-  }, [microsoft?.syncStartedAt, microsoft?.syncState]);
-
-  const hasPartialMailSource = microsoft?.sourceCoverage === "local_cache_only";
-
-  const answerFromSavedMail = async () => {
-    if (!submittedQuery || loading) return;
-    resumeAfterMailSyncRef.current = false;
-    setFreshnessBlocked(false);
-    await executeQuery(submittedQuery, { fromSavedMail: true });
+    const useSavedMail = microsoft?.syncState === "syncing"
+      || (requiresFreshMail(request) && audit?.ready_for_mail_dependent_work === false);
+    await executeQuery(request, { fromSavedMail: useSavedMail });
   };
 
   const refreshMail = async () => {
@@ -329,7 +269,6 @@ export function AgentView({
       if (ready && submittedQuery) {
         await executeQuery(submittedQuery);
       } else {
-        setFreshnessBlocked(true);
         setError("메일 갱신 후에도 최신 상태가 확인되지 않았습니다. Outlook 연결과 동기화 상태를 확인하세요.");
       }
     } catch (caught) {
@@ -448,23 +387,34 @@ export function AgentView({
   };
 
   const status = result ? answerStatus[result.answer.status] : null;
+  const resultHasNoEvidence = Boolean(
+    result
+    && result.answer.counts.style === 0
+    && result.answer.counts.mail === 0
+    && result.answer.counts.fact === 0
+    && result.answer.counts.visual === 0,
+  );
   const runtimeNotice = fallbackNotice(result?.synthesis.fallback_reason);
   const answerUsedFallback = result?.synthesis.mode === "deterministic";
   const displayedEngineReady = agentStatus?.mode === "model_ready" && !answerUsedFallback;
-  const displayedEngineLabel = answerUsedFallback
-    ? "이번 답변 규칙 기반"
-    : agentStatus?.mode === "model_ready"
-      ? `${agentStatus.model} 연결`
-      : "규칙 기반 답변";
+  const displayedEngineLabel = modelChanging
+    ? "모델 전환 중"
+    : answerUsedFallback
+      ? "이번 답변 규칙 기반"
+      : agentStatus?.mode === "model_ready"
+        ? `${agentStatus.model} 연결`
+        : "규칙 기반 답변";
   const selectedProvider = agentStatus?.providers.find(
     (provider) => provider.id === agentStatus.selected_provider,
   );
   const selectedModel = selectedProvider?.model_options?.find(
     (model) => model.id === agentStatus?.model,
   );
-  const selectedModelLabel = agentStatus
-    ? `${selectedModel?.label ?? agentStatus.model} · ${selectedModel?.profile ?? "균형"}`
-    : "모델 확인 중";
+  const selectedModelLabel = pendingModel
+    ? `${pendingModel.label} · 전환 중`
+    : agentStatus
+      ? `${selectedModel?.label ?? agentStatus.model} · ${selectedModel?.profile ?? "균형"}`
+      : "모델 확인 중";
   const modelPickerDisabled = modelChanging || loading || !agentStatus;
   const resultMailIsStale = Boolean(
     result?.judgment.evidence_summary.mail_index?.db_may_be_stale,
@@ -472,7 +422,7 @@ export function AgentView({
   const latestMailDate = result?.judgment.evidence_summary.mail_index?.latest_received;
 
   return (
-    <div className="agent-panel">
+    <div className={loading ? "agent-panel agent-is-working" : "agent-panel"}>
       <header className="agent-panel-header">
         <div className="agent-panel-title">
           <span className="agent-panel-mark">
@@ -481,6 +431,8 @@ export function AgentView({
           <div>
             <strong>Work Agent</strong>
             <span
+              aria-busy={modelChanging}
+              aria-live="polite"
               className={`agent-engine-status ${
                 displayedEngineReady ? "connected" : "fallback"
               }`}
@@ -498,14 +450,19 @@ export function AgentView({
               aria-expanded={modelMenuOpen}
               aria-haspopup="listbox"
               aria-label="답변 모델"
+              aria-busy={modelChanging}
               className="agent-model-trigger"
               disabled={modelPickerDisabled}
               onClick={() => setModelMenuOpen((current) => !current)}
-              title="Work Agent 답변 모델"
+              title={modelChanging ? "답변 모델 연결을 확인하는 중" : "Work Agent 답변 모델"}
               type="button"
             >
               <span>{selectedModelLabel}</span>
-              <ChevronDown aria-hidden="true" size={14} />
+              {modelChanging ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={14} />
+              ) : (
+                <ChevronDown aria-hidden="true" size={14} />
+              )}
             </button>
             {modelMenuOpen && agentStatus ? (
               <div
@@ -573,64 +530,7 @@ export function AgentView({
       <div className="agent-panel-scroll" ref={scrollRef}>
         {error ? <ErrorBanner message={error} /> : null}
 
-        {freshnessBlocked && !loading ? (
-          <section
-            className="agent-freshness-gate"
-            role={microsoft?.syncState === "syncing" ? "status" : "alert"}
-          >
-            <AlertTriangle size={20} />
-            <div>
-              <strong>
-                {microsoft?.syncState === "syncing"
-                  ? `Outlook 동기화 중 · ${formatElapsed(syncElapsedSeconds)} 경과`
-                  : hasPartialMailSource
-                    ? "신형 Outlook 원본 연결이 필요합니다"
-                    : "최신 메일을 먼저 갱신해야 합니다"}
-              </strong>
-              <p>
-                {microsoft?.syncState === "syncing"
-                  ? "최신 메일이 필요한 질문만 보관했습니다. 다른 화면과 일반 질문은 계속 사용할 수 있으며, 아래 버튼으로 저장된 자료 기준 답변을 바로 받을 수도 있습니다."
-                  : hasPartialMailSource
-                    ? "현재 Classic Outlook 로컬 캐시에는 신형 Outlook의 메일이 일부 누락됩니다. 이 상태에서는 발신자별 메일 건수와 요약을 확정할 수 없습니다."
-                  : "현재 메일 자료가 오래되어 최신 상태로 단정할 수 없습니다. Outlook을 갱신한 뒤 답변을 다시 실행하세요."}
-              </p>
-              <div className="freshness-actions">
-                <button
-                  className="primary-button"
-                  disabled={mailRefreshing || microsoft?.syncState === "syncing"}
-                  onClick={() =>
-                    microsoft?.configured
-                    && microsoft.state === "connected"
-                    && !hasPartialMailSource
-                      ? void refreshMail()
-                      : onOpenMailSettings()
-                  }
-                  type="button"
-                >
-                  {microsoft?.configured
-                  && microsoft.state === "connected"
-                  && !hasPartialMailSource
-                    ? mailRefreshing || microsoft?.syncState === "syncing"
-                      ? "메일 갱신 중"
-                      : "최신 메일 가져오기"
-                    : hasPartialMailSource
-                      ? "Microsoft 365 연결 확인"
-                      : "Outlook 연결 설정"}
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={loading || !submittedQuery}
-                  onClick={() => void answerFromSavedMail()}
-                  type="button"
-                >
-                  저장된 자료로 지금 답변
-                </button>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {!result && !loading && !freshnessBlocked ? (
+        {!result && !loading ? (
           <div className="agent-empty">
             <Bot size={28} />
             <strong>무엇을 확인할까요?</strong>
@@ -647,16 +547,23 @@ export function AgentView({
         {loading ? (
           <>
             <div className="agent-query-bubble">{submittedQuery}</div>
-            <LoadingBlock
-              label="근거를 확인하고 실행안을 정리하는 중"
-              prominent
-              state="solving"
-            />
+            <div className="agent-motion-loading">
+              <LoadingBlock
+                label="근거를 확인하고 실행안을 정리하는 중"
+                state="solving"
+              />
+              <AgentExecutionPulse />
+            </div>
           </>
         ) : null}
 
         {result ? (
-          <div className="agent-result">
+          <motion.div
+            animate={{ opacity: 1, y: 0 }}
+            className="agent-result"
+            initial={{ opacity: 0, y: 6 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+          >
             <div className="agent-query-bubble">{submittedQuery}</div>
             {answeredFromSavedMail ? (
               <div className="agent-runtime-notice agent-stored-mail-notice" role="status">
@@ -716,14 +623,17 @@ export function AgentView({
             </section>
 
             <section className="agent-section">
-              <h3>오늘 실행 순서</h3>
-              <div className="action-plan compact-action-plan">
-                {result.answer.action_plan.slice(0, 3).map((step) => {
+              <h3>{result.answer.response_mode === "summary" ? "정리 결과" : "오늘 실행 순서"}</h3>
+              <div className={`action-plan compact-action-plan${result.answer.response_mode === "summary" ? " summary-result-plan" : ""}`}>
+                {result.answer.action_plan.map((step) => {
                   const stepState = actionState[step.state];
                   return (
-                    <div
+                    <motion.div
                       className={`action-step action-step-${step.state}`}
+                      initial={{ opacity: 0, x: 5 }}
                       key={`${step.order}-${step.title}`}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: Math.min(step.order - 1, 2) * 0.05, duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                     >
                       <span className="step-order">{step.order}</span>
                       <div className="step-main">
@@ -732,16 +642,25 @@ export function AgentView({
                           <Badge value={stepState.label} tone={stepState.tone} />
                         </div>
                         <p>{step.instruction}</p>
+                        {result.answer.response_mode === "summary" ? (
+                          <div className="action-step-check action-step-check-static">
+                            <strong>판단 근거</strong>
+                            <span>{step.completion_check}</span>
+                          </div>
+                        ) : (
+                          <details className="action-step-check">
+                            <summary>
+                              완료 기준
+                              <ChevronDown size={13} />
+                            </summary>
+                            <span>{step.completion_check}</span>
+                          </details>
+                        )}
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </div>
-              {result.answer.action_plan.length > 3 ? (
-                <span className="agent-more-count">
-                  상세 실행 {result.answer.action_plan.length - 3}건 더 있음
-                </span>
-              ) : null}
             </section>
 
             {result.actionBlockedReason ? (
@@ -755,6 +674,30 @@ export function AgentView({
               <div className="agent-action-blocked" role="status">
                 <AlertTriangle size={16} />
                 <span>{result.contextNotice}</span>
+              </div>
+            ) : null}
+
+            {resultHasNoEvidence ? (
+              <div className="agent-source-recovery" role="status">
+                <FileSearch size={17} />
+                <div>
+                  <strong>원본을 연결하면 오늘 업무를 다시 확정할 수 있습니다.</strong>
+                  <span>근거 없는 회신·제출·승인 업무는 저장하지 않습니다.</span>
+                </div>
+                <div>
+                  <button
+                    className="primary-button"
+                    disabled={mailRefreshing || loading}
+                    onClick={() => void refreshMail()}
+                    type="button"
+                  >
+                    <RefreshCw className={mailRefreshing ? "spin" : ""} size={14} />
+                    {mailRefreshing ? "메일 갱신 중" : "Outlook 메일 갱신"}
+                  </button>
+                  <button className="secondary-button" onClick={onOpenMailSettings} type="button">
+                    연결 설정
+                  </button>
+                </div>
               </div>
             ) : null}
 
@@ -805,10 +748,16 @@ export function AgentView({
                 {actionExecution ? (
                   <div className="agent-action-results" role="status">
                     {actionExecution.results.map((item) => (
-                      <div className={item.status} key={item.id}>
+                      <motion.div
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={item.status}
+                        initial={{ opacity: 0, scale: 0.97 }}
+                        key={item.id}
+                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                      >
                         {item.status === "success" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
                         <span>{item.label} · {item.status === "success" ? "완료" : item.status === "cancelled" ? "취소됨" : "실패"}</span>
-                      </div>
+                      </motion.div>
                     ))}
                   </div>
                 ) : (
@@ -848,7 +797,7 @@ export function AgentView({
                   </div>
                   <button
                     className="secondary-button agent-save"
-                    disabled={saving || Boolean(savedCase) || resultMailIsStale || Boolean(result.actionReview)}
+                    disabled={saving || Boolean(savedCase) || resultMailIsStale || resultHasNoEvidence || Boolean(result.actionReview)}
                     onClick={() => void saveCase()}
                     type="button"
                   >
@@ -859,25 +808,12 @@ export function AgentView({
                         : "업무 건 저장됨"
                       : resultMailIsStale
                         ? "메일 갱신 후 저장 가능"
+                        : resultHasNoEvidence
+                          ? "근거 확인 후 저장 가능"
                         : result.actionReview
                           ? "위 실행 검토에서 저장"
                           : "답변과 할 일 저장"}
                   </button>
-                </section>
-
-                <section className="agent-section">
-                  <h3>전체 실행 지시</h3>
-                  <div className="agent-full-action-list">
-                    {result.answer.action_plan.map((step) => (
-                      <div key={`${step.order}-${step.title}`}>
-                        <strong>
-                          {step.order}. {step.title}
-                        </strong>
-                        <p>{step.instruction}</p>
-                        <span>완료 기준 · {step.completion_check}</span>
-                      </div>
-                    ))}
-                  </div>
                 </section>
 
                 <section className="agent-section">
@@ -1019,7 +955,7 @@ export function AgentView({
                 </details>
               </div>
             </details>
-          </div>
+          </motion.div>
         ) : null}
       </div>
 
@@ -1035,8 +971,8 @@ export function AgentView({
         <button
           aria-label="Work Agent 실행"
           className="primary-button"
-          disabled={loading || !query.trim()}
-          title="답변 받기"
+          disabled={loading || modelChanging || !query.trim()}
+          title={modelChanging ? "모델 전환이 끝나면 답변할 수 있습니다" : "답변 받기"}
           type="submit"
         >
           <Send size={17} />

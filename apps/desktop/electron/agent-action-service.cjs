@@ -40,6 +40,9 @@ const MUTATING_ACTIONS = new Set([
 ]);
 
 const SAFE_WHEN_MAIL_STALE = new Set([
+  "create_case",
+  "create_task",
+  "create_artifact",
   "sync_outlook",
   "initialize_indexes",
   "refresh_folder",
@@ -51,7 +54,7 @@ const ACTION_INPUT_RULES = {
   create_case: { required: ["title"], allowed: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "evidence", "pendingDecisions"] },
   update_case: { requiredAny: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "pendingDecisions"], allowed: ["title", "status", "priority", "owner", "department", "stage", "summary", "businessKeys", "pendingDecisions"] },
   create_task: { required: ["title"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"] },
-  update_task: { requiredAny: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check"] },
+  update_task: { requiredAny: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"], allowed: ["title", "status", "owner", "dueAt", "due_at", "source", "instruction", "completionCheck", "completion_check", "evidence"] },
   create_milestone: { required: ["label"], allowed: ["type", "label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "source", "dependsOnIds"] },
   update_milestone: { requiredAny: ["label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "dependsOnIds"], allowed: ["label", "plannedAt", "planned_at", "actualAt", "actual_at", "status", "dependsOnIds"] },
   record_decision: { required: ["question", "outcome"], allowed: ["question", "outcome", "rationale", "source", "selectedEvidence", "rejectedAlternatives", "impactSummary", "releaseCase"] },
@@ -81,6 +84,19 @@ function pickInput(input, fields) {
   );
 }
 
+function compactEvidence(value) {
+  if (typeof value === "string") return cleanText(value, 500);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return Object.fromEntries(
+    [
+      "id", "kind", "label", "title", "detail", "snippet", "source_id",
+      "relative_path", "path", "location", "source_date", "confidence",
+    ]
+      .filter((key) => value[key] !== undefined && value[key] !== null)
+      .map((key) => [key, cleanText(String(value[key]), key === "snippet" ? 500 : 300)]),
+  );
+}
+
 function compactCase(item) {
   return {
     id: item.id,
@@ -93,10 +109,12 @@ function compactCase(item) {
     buyer_name: item.buyerName,
     buyer_pack_id: item.buyerPackId,
     stage: item.stage,
+    summary: cleanText(item.summary, 1_000),
     styles: (item.businessKeys || [])
       .filter((key) => String(key.kind || "").toLowerCase().includes("style"))
       .map((key) => key.value),
     pending_decisions: item.pendingDecisions || [],
+    evidence: (item.evidence || []).slice(0, 6).map(compactEvidence).filter(Boolean),
     updated_at: item.updatedAt,
   };
 }
@@ -159,6 +177,10 @@ function buildAgentAppContext(state, folders = [], mailStatus = null, buyerConte
       status: item.status,
       owner: item.owner,
       due_at: item.dueAt,
+      source: cleanText(item.source, 500),
+      instruction: cleanText(item.instruction, 1_000),
+      completion_check: cleanText(item.completionCheck, 500),
+      evidence: (item.evidence || []).slice(0, 4).map(compactEvidence).filter(Boolean),
       updated_at: item.updatedAt,
     })),
     milestones: (state.milestones || []).slice(0, limits.milestones).map((item) => ({
@@ -176,6 +198,12 @@ function buildAgentAppContext(state, folders = [], mailStatus = null, buyerConte
       case_id: item.caseId,
       question: item.question,
       outcome: item.outcome,
+      rationale: cleanText(item.rationale, 1_000),
+      source: cleanText(item.source, 500),
+      selected_evidence: (item.selectedEvidence || []).slice(0, 6).map(compactEvidence).filter(Boolean),
+      reuse_scope: item.reuseScope || "case",
+      rule_enabled: item.ruleEnabled === true,
+      rule_scope: item.ruleScope || {},
       decided_at: item.decidedAt,
     })),
     artifacts: (state.artifactJobs || []).slice(0, limits.artifacts).map((item) => ({
@@ -501,23 +529,23 @@ function createAgentActionService(options) {
     const state = currentStore().getState();
     switch (action.type) {
       case "create_case": {
-        const created = currentStore().createCase(pickInput(input, [
-          "title", "status", "priority", "owner", "department", "stage", "summary",
-          "businessKeys", "evidence", "pendingDecisions",
-        ]));
+        const created = currentStore().createReviewedCase(pickInput(input, [
+            "title", "status", "priority", "owner", "department", "stage", "summary",
+            "businessKeys", "evidence", "pendingDecisions",
+          ]));
         context.lastCaseId = created.id;
         return created;
       }
       case "update_case":
-        return currentStore().updateCase({
+        return currentStore().updateReviewedCase({
           ...pickInput(input, [
             "title", "status", "priority", "owner", "department", "stage", "summary",
-            "businessKeys", "pendingDecisions",
-          ]),
-          id: action.targetId,
-        });
+          "businessKeys", "pendingDecisions",
+        ]),
+        id: action.targetId,
+      });
       case "create_task":
-        return currentStore().createTask({
+        return currentStore().createReviewedTask({
           ...pickInput(input, [
             "title", "status", "owner", "dueAt", "due_at", "source", "instruction",
             "completionCheck", "completion_check", "evidence",
@@ -526,10 +554,10 @@ function createAgentActionService(options) {
           caseId: requireCaseId(action, context.lastCaseId, state),
         });
       case "update_task":
-        return currentStore().updateTask({
+        return currentStore().updateReviewedTask({
           ...pickInput(input, [
             "title", "status", "owner", "dueAt", "due_at", "source", "instruction",
-            "completionCheck", "completion_check",
+            "completionCheck", "completion_check", "evidence",
           ]),
           dueAt: input.dueAt ?? input.due_at,
           id: action.targetId,
@@ -621,13 +649,9 @@ function createAgentActionService(options) {
     const context = { lastCaseId: "", lastArtifactId: "" };
     const results = [];
     for (const action of actions) {
-      const beforeState = currentStore().getState();
-      const before = targetSnapshot(beforeState, action);
       try {
         const value = await runAction(action, context);
-        const afterState = currentStore().getState();
         const targetId = value?.id || action.targetId || context.lastArtifactId || context.lastCaseId;
-        const after = targetSnapshot(afterState, { ...action, targetId }) || value || null;
         const resultStatus = value === null ? "cancelled" : "success";
         currentStore().recordAuditEvent({
           action: "agent.action.approved",
@@ -639,9 +663,7 @@ function createAgentActionService(options) {
             evidenceHash: review.evidenceHash,
             evidenceRevision: review.evidenceRevision,
             proposalId: action.id,
-            label: action.label,
-            before,
-            after,
+            changedFields: Object.keys(action.input || {}).sort(),
             result: resultStatus,
           },
         });
@@ -657,10 +679,9 @@ function createAgentActionService(options) {
             evidenceHash: review.evidenceHash,
             evidenceRevision: review.evidenceRevision,
             proposalId: action.id,
-            label: action.label,
-            before,
+            changedFields: Object.keys(action.input || {}).sort(),
             result: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            errorCode: "agent_action_failed",
           },
         });
         results.push({ id: action.id, type: action.type, label: action.label, status: "failed", error: error instanceof Error ? error.message : String(error), targetId: action.targetId });

@@ -507,6 +507,19 @@ async function initializeBusinessIndexes(execute = runCli, onProgress = () => {}
       ],
     });
   }
+  if (statuses.get("visual_sketch_index") !== "pass") {
+    steps.push({
+      id: "visuals",
+      label: "스케치 검색 자료 준비",
+      args: [
+        "visual-refresh",
+        "--include-top",
+        "Talbots",
+        "--progress-every",
+        "1000000000",
+      ],
+    });
+  }
   const completed = [];
   for (const [index, step] of steps.entries()) {
     onProgress({

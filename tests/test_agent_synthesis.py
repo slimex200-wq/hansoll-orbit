@@ -134,6 +134,193 @@ class AgentSynthesisTests(unittest.TestCase):
         self.assertIn("[phone omitted]", mail["body_preview"])
         self.assertIn("7/20", mail["body_preview"])
 
+    def test_evidence_packet_projects_evidence_and_saved_work_into_query_ontology(self) -> None:
+        judgment = {
+            "query": "233900002 이번 주 GAC 위험 정리",
+            "nine_spaces": {
+                "concept": {"value": "wip_update"},
+                "target": {"styles": ["233900002"]},
+            },
+            "classification": {
+                "styles": ["233900002"],
+                "primary_concept": "wip_update",
+            },
+            "decisions": {"confidence": "medium"},
+            "style_evidence_cards": [],
+            "evidence_summary": {
+                "mail_index": {
+                    "top_hits": [
+                        {
+                            "mail_id": "mail-1",
+                            "received": "2026-08-05T09:00:00Z",
+                            "sender": "vendor@example.com",
+                            "subject": "S#233900002-005 GAC 8/4 SHORT SHIPMENT",
+                            "body_preview": "Buyer reply is pending.",
+                            "style_numbers": "233900002-005",
+                        }
+                    ]
+                },
+                "style_index": {"top_hits": []},
+                "fact_index": {"top_hits": []},
+                "visual_index": {"top_hits": []},
+            },
+        }
+        draft = {
+            "status": "needs_review",
+            "confirmations": [],
+            "deliverables": [],
+            "findings": [],
+        }
+        app_context = {
+            "cases": [
+                {
+                    "id": "case-1",
+                    "title": "233900002 GAC follow-up",
+                    "status": "evidence",
+                    "styles": ["233900002"],
+                    "summary": "Short shipment follow-up",
+                    "evidence": ["latest mail checked"],
+                }
+            ],
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "case_id": "case-1",
+                    "title": "Buyer reply waiting",
+                    "status": "waiting",
+                }
+            ],
+            "milestones": [],
+            "decisions": [],
+            "artifacts": [],
+        }
+
+        packet = build_evidence_packet(judgment, draft, app_context=app_context)
+        ontology = packet["query_ontology"]
+
+        self.assertEqual(ontology["grammar"]["concept"]["value"], "wip_update")
+        self.assertTrue(
+            any(item["id"] == "case:case-1" for item in ontology["entities"])
+        )
+        self.assertTrue(
+            any(item["type"] == "MENTIONED_IN_MAIL" for item in ontology["relations"])
+        )
+        self.assertTrue(
+            any(item["type"] == "saved_case_evidence" for item in ontology["assertions"])
+        )
+        serialized = str(ontology)
+        self.assertIn("233900002-005", serialized)
+        self.assertNotIn("[phone omitted]", serialized)
+
+    def test_query_ontology_links_matching_reusable_decision_rule(self) -> None:
+        judgment = {
+            "query": "233900002 submit draft",
+            "classification": {"styles": ["233900002"], "primary_concept": "submit"},
+            "decisions": {"confidence": "medium"},
+            "style_evidence_cards": [],
+            "evidence_summary": {
+                "mail_index": {"top_hits": []},
+                "style_index": {"top_hits": []},
+                "fact_index": {"top_hits": []},
+                "visual_index": {"top_hits": []},
+            },
+        }
+        app_context = {
+            "cases": [{
+                "id": "case-current",
+                "title": "233900002 submit",
+                "styles": ["233900002"],
+                "buyer_id": "talbots",
+                "buyer_name": "Talbots",
+                "department": "Sales",
+                "stage": "Submit",
+            }],
+            "tasks": [],
+            "milestones": [],
+            "decisions": [{
+                "id": "decision-prior",
+                "case_id": "case-prior",
+                "question": "Which source controls?",
+                "outcome": "Use latest approved WIP; unsupported values stay TBD.",
+                "reuse_scope": "future",
+                "rule_enabled": True,
+                "rule_scope": {
+                    "buyerId": "talbots",
+                    "buyerName": "Talbots",
+                    "department": "Sales",
+                    "stage": "Submit",
+                },
+            }],
+            "artifacts": [],
+        }
+
+        packet = build_evidence_packet(
+            judgment,
+            {"status": "needs_review", "confirmations": [], "deliverables": [], "findings": []},
+            app_context=app_context,
+        )
+        ontology = packet["query_ontology"]
+
+        self.assertTrue(any(item["type"] == "DecisionRule" for item in ontology["entities"]))
+        self.assertTrue(
+            any(item["type"] == "HAS_APPLICABLE_RULE" for item in ontology["relations"])
+        )
+
+    def test_query_ontology_does_not_link_disabled_reusable_rule(self) -> None:
+        judgment = {
+            "query": "233900002 submit draft",
+            "classification": {"styles": ["233900002"], "primary_concept": "submit"},
+            "decisions": {"confidence": "medium"},
+            "style_evidence_cards": [],
+            "evidence_summary": {},
+        }
+        app_context = {
+            "cases": [{
+                "id": "case-current",
+                "styles": ["233900002"],
+                "buyer_name": "Talbots",
+                "department": "Sales",
+                "stage": "Submit",
+            }],
+            "tasks": [],
+            "milestones": [],
+            "decisions": [{
+                "id": "decision-disabled",
+                "case_id": "case-prior",
+                "question": "Old policy",
+                "outcome": "Do not reuse",
+                "reuse_scope": "future",
+                "rule_enabled": False,
+                "rule_scope": {"buyerName": "Talbots", "department": "Sales", "stage": "Submit"},
+            }],
+            "artifacts": [],
+        }
+
+        packet = build_evidence_packet(
+            judgment,
+            {"status": "needs_review", "confirmations": [], "deliverables": [], "findings": []},
+            app_context=app_context,
+        )
+
+        self.assertFalse(
+            any(item["type"] == "HAS_APPLICABLE_RULE" for item in packet["query_ontology"]["relations"])
+        )
+
+    def test_prompt_treats_ontology_as_reasoning_substrate_not_draft_wording(self) -> None:
+        prompt = build_synthesis_prompt(
+            {
+                "query": "이번 주 업무 정리",
+                "response_mode": "summary",
+                "query_ontology": {"entities": [], "relations": [], "assertions": []},
+                "deterministic_controls": {"confirmations": []},
+            }
+        )
+
+        self.assertIn("query_ontology is the primary reasoning substrate", prompt)
+        self.assertIn("HAS_APPLICABLE_RULE is reusable operator policy", prompt)
+        self.assertIn("not an answer template", prompt)
+        self.assertNotIn("deterministic_draft.visible_findings", prompt)
+
     def test_merge_keeps_deterministic_confirmations_and_deliverable_block(self) -> None:
         draft = {
             "status": "needs_confirmation",
@@ -244,6 +431,105 @@ class AgentSynthesisTests(unittest.TestCase):
         self.assertIn("exact artifact", prompt)
         self.assertIn("Never propose composing", prompt)
         self.assertIn("No buyer has been confirmed", prompt)
+
+    def test_summary_prompt_requires_results_instead_of_delegated_research(self) -> None:
+        prompt = build_synthesis_prompt(
+            {
+                "query": "이번 주 GAC 지연 위험과 회신 대기 업무 정리",
+                "response_mode": "summary",
+            }
+        )
+
+        self.assertIn("must perform the classification", prompt)
+        self.assertIn("ranked findings", prompt)
+        self.assertIn("Do not use imperative Korean endings", prompt)
+        self.assertIn("Do not turn a summary request into a plan", prompt)
+
+    def test_mixed_today_work_list_request_prefers_summary_contract(self) -> None:
+        prompt = build_synthesis_prompt(
+            {"query": "233900002 오늘 해야 할 일만 우선순위대로 정리해줘"}
+        )
+
+        self.assertIn("This is a summary/status request", prompt)
+        self.assertIn("Do not use imperative Korean endings", prompt)
+
+    def test_summary_validation_rejects_answer_that_delegates_every_step(self) -> None:
+        payload = {
+            "summary": "GAC 위험 후보와 회신 대기 후보가 있으나 원본 확인이 필요합니다.",
+            "recommendation": {
+                "state": "review_required",
+                "title": "GAC 위험 후보를 정리해야 합니다.",
+                "conclusion": "검색 결과에는 위험 후보와 Waiting 후보가 있지만 최종 상태는 미확정입니다.",
+                "next_move": "담당자가 원본과 최신 메일을 확인한 뒤 상태를 확정합니다.",
+            },
+            "results": [
+                {
+                    "title": "WIP를 확인하세요",
+                    "status": "확인 필요",
+                    "detail": "활성 WIP 원본을 열고 완료 건을 제외해 위험 후보를 분리하세요.",
+                    "evidence": "WIP 검색 결과",
+                    "remaining_unknown": "완료 상태",
+                },
+                {
+                    "title": "메일을 확인하세요",
+                    "status": "확인 필요",
+                    "detail": "최신 thread를 열고 Waiting과 Chase Needed를 분리하세요.",
+                    "evidence": "메일 검색 결과",
+                    "remaining_unknown": "마지막 회신 주체",
+                },
+            ],
+            "confirmations": [],
+            "app_actions": [],
+        }
+
+        with self.assertRaisesRegex(AgentSynthesisError, "delegates classification"):
+            validate_synthesis(payload, response_mode="summary")
+
+    def test_summary_schema_accepts_results_without_action_plan_and_merge_does_not_create_tasks(self) -> None:
+        payload = {
+            "summary": "이번 주 GAC 위험 후보 1건과 회신 대기 후보 1건이 검색 근거에 연결됩니다.",
+            "recommendation": {
+                "state": "review_required",
+                "title": "GAC 위험과 회신 대기 후보를 정리했습니다.",
+                "conclusion": "한 건은 Short Shipment 위험이고 한 건은 buyer 회신 대기 후보입니다.",
+                "next_move": "",
+            },
+            "results": [
+                {
+                    "title": "233900002-005",
+                    "status": "GAC 위험 후보",
+                    "detail": "GAC 8/4 Short Shipment 제목의 최신 메일이 연결됩니다.",
+                    "evidence": "2026-08-05 GAC 8/4 SHORT SHIPMENT 메일",
+                    "remaining_unknown": "부족 수량",
+                },
+                {
+                    "title": "62124916",
+                    "status": "Waiting 후보",
+                    "detail": "마지막 관련 메일 이후 buyer 회신 여부가 확인되지 않았습니다.",
+                    "evidence": "2026-08-05 ECU Worldwide 메일",
+                    "remaining_unknown": "Microsoft 365 최신 회신",
+                },
+            ],
+            "confirmations": ["Microsoft 365 최신 회신 여부"],
+            "app_actions": [],
+        }
+        validated = validate_synthesis(payload, response_mode="summary")
+        draft = {
+            "status": "needs_review",
+            "recommendation": {"state": "review_required"},
+            "confirmations": [],
+            "deliverables": [],
+            "task_suggestions": [],
+        }
+
+        answer = merge_synthesis(draft, validated)
+
+        self.assertEqual(len(answer["summary_results"]), 2)
+        self.assertEqual(answer["task_suggestions"], [])
+        self.assertIn("GAC 위험 후보", answer["action_plan"][0]["title"])
+        self.assertIn("근거:", answer["action_plan"][0]["completion_check"])
+        self.assertIn("정리 결과:", answer["answer_text"])
+        self.assertNotIn("실행 순서:", answer["answer_text"])
 
     def test_prompt_uses_confirmed_buyer_and_protects_draft_pack(self) -> None:
         prompt = build_synthesis_prompt(

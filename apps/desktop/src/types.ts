@@ -95,6 +95,14 @@ export interface Decision {
   decidedAt: string;
   impactedTaskIds?: string[];
   impactedArtifactIds?: string[];
+  reuseScope?: "case" | "future";
+  ruleEnabled?: boolean;
+  ruleScope?: {
+    buyerId?: string;
+    buyerName?: string;
+    department?: string;
+    stage?: string;
+  };
 }
 
 export interface ArtifactJob {
@@ -133,6 +141,22 @@ export interface DomainState {
   decisions: Decision[];
   artifactJobs: ArtifactJob[];
   auditEvents: AuditEvent[];
+}
+
+export interface LocalStateHealth {
+  status: "healthy" | "degraded_recovered" | "degraded_empty";
+  schemaVersion: number;
+  lastBackupAt: string | null;
+  lastRestoreAt: string | null;
+  recoveryKind: "none" | "automatic" | "pre_restore" | "corrupt_preserved";
+  errorCode: string;
+}
+
+export interface LocalStateBackupResult {
+  status: "created" | "restored" | "cancelled";
+  createdAt?: string;
+  restoredAt?: string;
+  restartRequired?: boolean;
 }
 
 export interface AuditItem {
@@ -371,9 +395,17 @@ export interface AgentAnswer {
   status: "ready_for_review" | "needs_review" | "needs_confirmation";
   headline: string;
   summary: string;
+  response_mode?: "summary" | "action";
   answer_text: string;
   recommendation: AgentRecommendation;
   action_plan: AgentActionStep[];
+  summary_results?: Array<{
+    title: string;
+    status: string;
+    detail: string;
+    evidence: string;
+    remaining_unknown: string;
+  }>;
   concept: string;
   concept_label: string;
   confidence: string;
@@ -595,30 +627,39 @@ export interface DesktopApi {
   selectBuyerContext(buyerId: string): Promise<BuyerContextSnapshot>;
   onBuyerContextChanged(callback: (context: BuyerContextSnapshot) => void): () => void;
   getState(): Promise<DomainState>;
+  getLocalStateHealth(): Promise<LocalStateHealth>;
+  exportLocalStateBackup(): Promise<LocalStateBackupResult>;
+  restoreLocalStateBackup(): Promise<LocalStateBackupResult>;
   createCase(input: Partial<WorkCase>): Promise<WorkCase>;
   createCaseWithTasks(input: {
     workCase: Partial<WorkCase>;
     tasks: Array<Partial<WorkTask> & { title: string }>;
   }): Promise<{ workCase: WorkCase; tasks: WorkTask[]; merged?: boolean }>;
   updateCase(input: Partial<WorkCase> & { id: string }): Promise<WorkCase>;
+  deleteCase(id: string): Promise<{ id: string; removed: Record<string, number> }>;
   createTask(input: Partial<WorkTask> & {
     caseId?: string;
     workCase?: Partial<WorkCase>;
     title: string;
   }): Promise<WorkTask>;
   updateTask(input: Partial<WorkTask> & { id: string }): Promise<WorkTask>;
+  deleteTask(id: string): Promise<{ id: string; caseId: string }>;
   createMilestone(
     input: Partial<Milestone> & { caseId?: string; workCase?: Partial<WorkCase>; label: string },
   ): Promise<Milestone>;
   updateMilestone(input: Partial<Milestone> & { id: string }): Promise<Milestone>;
+  deleteMilestone(id: string): Promise<{ id: string; caseId: string }>;
   createDecision(
     input: Partial<Decision> & {
       caseId?: string;
       workCase?: Partial<WorkCase>;
       outcome: string;
       releaseCase?: boolean;
+      reuseScope?: "case" | "future";
     },
   ): Promise<Decision>;
+  updateDecision(input: { id: string; reuseScope?: "case" | "future"; ruleEnabled?: boolean }): Promise<Decision>;
+  deleteDecision(id: string): Promise<{ id: string; caseId: string }>;
   createArtifactJob(
     input: Partial<ArtifactJob> & {
       caseId?: string;

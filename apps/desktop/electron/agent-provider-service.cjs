@@ -50,6 +50,8 @@ function createAgentProviderService({
   platform = process.platform,
   processEnvironment = process.env,
 }) {
+  const providerStatusCache = new Map();
+
   function prepareCodexHome() {
     if (!codexHome) return null;
     fs.mkdirSync(codexHome, { recursive: true });
@@ -108,12 +110,13 @@ function createAgentProviderService({
   }
 
   async function readProviderStatus(definition, selectedModel) {
+    let providerStatus;
     try {
       const providerCodexHome = definition.id === "codex" ? prepareCodexHome() : null;
       const status = await bridge.agentStatus(definition.id, selectedModel, {
         codexHome: providerCodexHome,
       });
-      return {
+      providerStatus = {
         ...status,
         id: definition.id,
         label: definition.label,
@@ -125,7 +128,7 @@ function createAgentProviderService({
         model_options: definition.models,
       };
     } catch (error) {
-      return {
+      providerStatus = {
         enabled: true,
         mode: "deterministic_only",
         provider: "deterministic",
@@ -142,14 +145,23 @@ function createAgentProviderService({
         install_url: definition.installUrl,
       };
     }
+    providerStatusCache.set(definition.id, providerStatus);
+    return providerStatus;
   }
 
-  async function getStatus() {
+  async function getStatus({ refreshProviderId = "", useCacheOnly = false } = {}) {
     const settings = readSelection();
     const providers = await Promise.all(
-      Object.values(PROVIDERS).map((definition) =>
-        readProviderStatus(definition, settings.models[definition.id]),
-      ),
+      Object.values(PROVIDERS).map((definition) => {
+        const cached = providerStatusCache.get(definition.id);
+        const canReuse =
+          cached
+          && (useCacheOnly || (refreshProviderId && definition.id !== refreshProviderId))
+          && cached.selected_model === settings.models[definition.id];
+        return canReuse
+          ? Promise.resolve(cached)
+          : readProviderStatus(definition, settings.models[definition.id]);
+      }),
     );
     let selected = settings.selected;
     if (!selected) {
@@ -184,7 +196,16 @@ function createAgentProviderService({
       selected: providerId,
       models: { ...settings.models, [providerId]: selectedModel },
     });
-    return getStatus();
+    const cached = providerStatusCache.get(providerId);
+    if (cached) {
+      providerStatusCache.set(providerId, {
+        ...cached,
+        model: selectedModel,
+        selected_model: selectedModel,
+      });
+      return getStatus({ useCacheOnly: true });
+    }
+    return getStatus({ refreshProviderId: providerId });
   }
 
   async function connect(providerId) {
